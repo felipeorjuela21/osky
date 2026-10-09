@@ -137,6 +137,17 @@ def log_message(engine: Engine, conversation_id: str, role: str, text: str,
             values["questions"] = conversations.c.questions + 1
         conn.execute(update(conversations).where(conversations.c.id == conversation_id).values(**values))
 
+def recent_questions(engine: Engine, conversation_id: str, limit: int = 3) -> list[str]:
+    """Last questions the visitor asked (oldest first), for the advisor's WhatsApp message."""
+    with engine.connect() as conn:
+        rows = conn.execute(
+            select(chat_messages.c.text).where(
+                chat_messages.c.conversation_id == conversation_id, chat_messages.c.role == "visitante",
+                (chat_messages.c.intent.is_(None)) | (chat_messages.c.intent != "nombre"),
+            ).order_by(chat_messages.c.id.desc()).limit(limit)
+        ).scalars().all()
+    return list(reversed(rows))
+
 # ---------- admin views ----------
 
 def _iso(dt: datetime | None) -> str | None:

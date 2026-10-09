@@ -44,3 +44,23 @@ def test_three_advisors_rotate_and_fallback_is_only_backup(tmp_path, monkeypatch
     path.write_text(json.dumps({"contacts": contacts}), encoding="utf-8")
     sales._cache.update(mtime=None, data=None)
     assert sales.whatsapp_action()["contact"] == "Línea"
+
+def test_picker_offers_three_advisors_specialist_first_with_context(tmp_path, monkeypatch):
+    import json
+    from backend.app.services import sales
+    path = tmp_path / "contacts.json"
+    contacts = [
+        {"name": "Ana", "phone": "573001111111", "photo": "/comerciales/ana.jpg", "solutions": ["Pricing"]},
+        {"name": "Beto", "phone": "573002222222", "solutions": ["TMS"]},
+        {"name": "Caro", "phone": "573003333333"},
+        {"name": "Dani", "phone": "573004444444"},
+    ]
+    path.write_text(json.dumps({"contacts": contacts}), encoding="utf-8")
+    monkeypatch.setattr(sales, "CONTACTS_PATH", path)
+    sales._cache.update(mtime=None, data=None)
+    action = sales.whatsapp_action("TMS", "Laura", ["¿Qué es TMS?", "Quiero cotizar"])
+    assert len(action["advisors"]) == 3
+    assert action["advisors"][0]["name"] == "Beto"  # TMS specialist first
+    text = unquote(action["advisors"][0]["url"])
+    assert "soy Laura" in text and "Me interesa: TMS." in text and "“Quiero cotizar”" in text
+    assert action["label"] == "Hablar con un asesor sobre TMS"

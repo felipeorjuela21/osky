@@ -1,5 +1,14 @@
 export type Source = { title: string; url: string; kind: string; score: number };
-export type Action = { type: "whatsapp"; label: string; url: string; contact: string; area: string };
+export type Advisor = { name: string; area: string; photo: string; solutions: string[]; url: string };
+export type Action = {
+  type: "whatsapp";
+  label: string;
+  url: string;
+  contact: string;
+  area: string;
+  /** Advisors to choose from (up to 3); each link already carries the conversation summary. */
+  advisors?: Advisor[];
+};
 
 export type AskResponse = {
   status: "ok" | "not_found" | "not_understood" | "rejected";
@@ -125,3 +134,9 @@ export async function waitForBackend(onSlow: () => void, timeoutMs = 90000): Pro
     window.clearTimeout(slow);
   }
 }
+
+/** Logs which advisor the visitor chose in the WhatsApp picker. Never blocks the page. */
+export const logContact = (conversationId: string | null | undefined, advisor: string) => {
+  if (!conversationId) return;
+  void post(`/api/conversations/${conversationId}/contact`, { advisor }).catch(() => undefined);
+};

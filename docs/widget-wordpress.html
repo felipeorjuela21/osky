@@ -1,56 +1,56 @@
 <!--
   Botón flotante "Habla con Osky" para celuweb.com (WordPress).
   Pégalo en: Apariencia → Editor de temas / un plugin tipo "Insert Headers and Footers" (pie de página),
-  o en un bloque "HTML personalizado". Cambia OSKI_URL por la dirección de Cloudflare Pages.
+  o en un bloque "HTML personalizado". Cambia OSKY_URL por la dirección de Cloudflare Pages.
   allow="microphone" es obligatorio para que Osky pueda escuchar dentro del sitio.
 -->
-<div id="oski-widget">
-  <button id="oski-open" type="button" aria-label="Habla con Osky, el asistente virtual de CeluWeb">
+<div id="osky-widget">
+  <button id="osky-open" type="button" aria-label="Habla con Osky, el asistente virtual de CeluWeb">
     <img src="https://www.celuweb.com/wp-content/uploads/2026/02/Astro-1-150x150.png" alt="" />
     <span>Habla con Osky</span>
   </button>
-  <div id="oski-panel" role="dialog" aria-label="Osky, asistente virtual de CeluWeb" hidden>
-    <button id="oski-close" type="button" aria-label="Cerrar">×</button>
-    <iframe id="oski-frame" title="Osky" allow="microphone; autoplay" loading="lazy"></iframe>
+  <div id="osky-panel" role="dialog" aria-label="Osky, asistente virtual de CeluWeb" hidden>
+    <button id="osky-close" type="button" aria-label="Cerrar">×</button>
+    <iframe id="osky-frame" title="Osky" allow="microphone; autoplay" loading="lazy"></iframe>
   </div>
 </div>
 <style>
-  #oski-widget { position: fixed; right: 18px; bottom: 18px; z-index: 99999; font-family: Montserrat, system-ui, sans-serif; }
-  #oski-widget [hidden] { display: none !important; }
-  #oski-open {
+  #osky-widget { position: fixed; right: 18px; bottom: 18px; z-index: 99999; font-family: Montserrat, system-ui, sans-serif; }
+  #osky-widget [hidden] { display: none !important; }
+  #osky-open {
     display: flex; align-items: center; gap: 8px; border: 0; cursor: pointer; border-radius: 999px;
     padding: 6px 16px 6px 6px; background: #f9cf00; color: #14253d; font-weight: 800; font-size: 15px;
     box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
   }
-  #oski-open img { width: 44px; height: 44px; border-radius: 50%; background: #0b1220; object-fit: contain; }
-  #oski-panel {
+  #osky-open img { width: 44px; height: 44px; border-radius: 50%; background: #0b1220; object-fit: contain; }
+  #osky-panel {
     position: fixed; right: 18px; bottom: 18px; width: 420px; height: min(720px, calc(100vh - 36px));
     border-radius: 18px; overflow: hidden; background: #0b1220; box-shadow: 0 20px 60px rgba(0, 0, 0, 0.45);
   }
-  #oski-panel iframe { width: 100%; height: 100%; border: 0; }
-  #oski-close {
+  #osky-panel iframe { width: 100%; height: 100%; border: 0; }
+  #osky-close {
     position: absolute; top: 8px; right: 10px; z-index: 2; width: 36px; height: 36px; border-radius: 50%;
     border: 0; cursor: pointer; background: rgba(255, 255, 255, 0.12); color: #fff; font-size: 22px; line-height: 1;
   }
   /* Teléfonos: pantalla completa */
   @media (max-width: 600px) {
-    #oski-open span { display: none; }
-    #oski-open { padding: 6px; }
-    #oski-panel { inset: 0; width: 100%; height: 100%; border-radius: 0; }
+    #osky-open span { display: none; }
+    #osky-open { padding: 6px; }
+    #osky-panel { inset: 0; width: 100%; height: 100%; border-radius: 0; }
   }
 </style>
 <script>
   (function () {
-    var OSKI_URL = "https://oski.pages.dev/?modo=persona&embed=1"; // <- cambia por tu dirección
-    var open = document.getElementById("oski-open");
-    var panel = document.getElementById("oski-panel");
-    var frame = document.getElementById("oski-frame");
+    var OSKY_URL = "https://osky.pages.dev/?modo=persona&embed=1"; // <- cambia por tu dirección
+    var open = document.getElementById("osky-open");
+    var panel = document.getElementById("osky-panel");
+    var frame = document.getElementById("osky-frame");
     open.addEventListener("click", function () {
-      if (!frame.getAttribute("src")) frame.setAttribute("src", OSKI_URL); // carga Osky solo al abrirlo
+      if (!frame.getAttribute("src")) frame.setAttribute("src", OSKY_URL); // carga Osky solo al abrirlo
       panel.hidden = false;
       open.hidden = true;
     });
-    document.getElementById("oski-close").addEventListener("click", function () {
+    document.getElementById("osky-close").addEventListener("click", function () {
       panel.hidden = true;
       open.hidden = false;
       frame.removeAttribute("src"); // detiene audio y micrófono

@@ -3,7 +3,7 @@
 # "sync: false" se piden al crear el servicio (no se guardan en el repositorio).
 services:
   - type: web
-    name: oski-api
+    name: osky-api
     runtime: python
     plan: free
     region: virginia            # la más cercana a Colombia
@@ -24,7 +24,7 @@ services:
         value: eastus
       - key: TTS_VOICE
         value: es-CO-GonzaloNeural
-      - key: CORS_ORIGINS       # la URL de Cloudflare Pages, p. ej. https://oski.pages.dev
+      - key: CORS_ORIGINS       # la URL de Cloudflare Pages, p. ej. https://osky.pages.dev
         sync: false
       - key: DATABASE_URL       # Neon (gratis): guarda el registro de conversaciones aunque Render reinicie.
         sync: false             # formato: postgresql+psycopg://usuario:clave@host/neondb?sslmode=require

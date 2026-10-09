@@ -12,11 +12,12 @@ from backend.app.core.db import engine
 from backend.app.core.security import rate_limit, require_admin
 from backend.app.services import conversations
 from backend.app.services.answer import build_answer
-from backend.app.services.knowledge import answer_from_knowledge, knowledge_stats, split_for_voice
+from backend.app.services.knowledge import answer_from_knowledge, get_index, knowledge_stats, split_for_voice
+from backend.app.services.needs import recommend
 from backend.app.services.llm import natural_answer
 from backend.app.services.stt import STTUnavailable, transcribe
 from backend.app.services.tts import TTSUnavailable, allowed_voice, spanish_voices, synthesize
-from backend.app.services.sales import SOLUTIONS, detect_solution, is_sales_request, whatsapp_action
+from backend.app.services.sales import SOLUTIONS, STRONG_INTENT, detect_solution, is_sales_request, whatsapp_action
 from backend.app.services.smalltalk import match_smalltalk, strip_greeting
 from backend.app.services.nl_parser import NotUnderstood, load_known_values, parse_question
 from backend.app.services.query_engine import (
@@ -55,6 +56,9 @@ class StartConversation(BaseModel):
 class NameRequest(BaseModel):
     text: str = Field(..., min_length=1, max_length=120)
     attempt: int = Field(default=1, ge=1, le=5)
+
+class ContactChoice(BaseModel):
+    advisor: str = Field(..., min_length=1, max_length=120)
 
 class LogTurn(BaseModel):
     question: str = Field(..., min_length=1, max_length=500)
@@ -175,6 +179,15 @@ def conversation_log(conversation_id: str, body: LogTurn):
     conversations.log_message(engine, conversation_id, "osky", body.answer, intent=body.intent)
     return {"status": "ok"}
 
+@router.post("/conversations/{conversation_id}/contact", dependencies=[Depends(rate_limit)])
+def conversation_contact(conversation_id: str, body: ContactChoice):
+    """The visitor chose an advisor in the WhatsApp picker."""
+    if not conversations.get(engine, conversation_id):
+        raise HTTPException(status_code=404, detail="Conversación no encontrada")
+    conversations.log_message(engine, conversation_id, "visitante", f"Abrió WhatsApp con {body.advisor}",
+                              intent="whatsapp", source=f"WhatsApp → {body.advisor}")
+    return {"status": "ok"}
+
 @router.get("/admin/conversations", dependencies=[Depends(require_admin)])
 def admin_conversations(limit: int = Query(50, ge=1, le=200), offset: int = Query(0, ge=0), q: str = ""):
     return conversations.list_conversations(engine, limit, offset, q.strip())
@@ -198,7 +211,9 @@ def admin_export():
 def ask(request: AskRequest):
     conversation = conversations.get(engine, request.conversation_id)
     name = conversation["visitor_name"] if conversation else None
-    response = _answer(request, name)
+    # What the visitor asked before: it goes in the WhatsApp message to the advisor.
+    history = conversations.recent_questions(engine, conversation["id"], 2) if conversation else []
+    response = _answer(request, name, [*history, request.question])
 
     # Warm, personal wording: "Claro, Ana. TMS: ..." (natural answers already include it).
     if not response.pop("_natural", False):
@@ -221,7 +236,7 @@ def ask(request: AskRequest):
     response["name"] = name
     return response
 
-def _answer(request: AskRequest, name: str | None) -> dict:
+def _answer(request: AskRequest, name: str | None, history: list[str]) -> dict:
     question = request.question
 
     # 0. Conversation (hola, gracias, adiós...): fixed replies about Osky, no company data.
@@ -231,12 +246,34 @@ def _answer(request: AskRequest, name: str | None) -> dict:
         return {"status": "ok", "source": "persona", "intent": talk["intent"], "answer": talk["answer"],
                 "query": None, "result": None, "sources": [], "actions": []}
     question = strip_greeting(question)
+    # Fuzzy spelling: "nesecito presios de pricin" -> "necesito precios de pricing".
+    question = get_index(engine).correct(question) or question
+
+    # 1a. A business need without a product name ("necesito controlar a mis empleados",
+    #     "algo para WhatsApp") -> the solutions that cover it.
+    if not detect_solution(question) and not STRONG_INTENT.search(question):
+        rec = recommend(engine, question, request.style)
+        if rec:
+            log_query(engine, question, None, rec["answer"], "needs")
+            action = whatsapp_action(rec["solutions"], name, history)
+            return {"status": "ok", "source": "website", "intent": "answer", "answer": rec["answer"],
+                    "more": rec["more"], "query": None, "result": None, "sources": rec["sources"],
+                    "actions": [action] if action else []}
 
     # 1. Wants an advisor, a quote or prices -> WhatsApp of the sales team.
     if is_sales_request(question):
         solution = detect_solution(question, request.topic)
-        action = whatsapp_action(solution)
-        if action:
+        action = whatsapp_action(solution, name, history)
+        if action and len(action["advisors"]) > 1:
+            about = f" sobre {solution}" if solution else ""
+            if request.style == "voice":
+                answer = (f"¡Con gusto! Te dejo en pantalla a nuestros asesores{about}: "
+                          "elige con quién quieres hablar por WhatsApp.")
+            else:
+                answer = (f"¡Con gusto! Toca el botón y elige con cuál de nuestros asesores quieres hablar{about} "
+                          "por WhatsApp. El mensaje ya lleva un resumen de lo que hablamos.")
+            actions = [action]
+        elif action:
             about = f" sobre {solution}" if solution else ""
             if request.style == "voice":
                 answer = (f"¡Con gusto! Te dejo en pantalla el botón para escribirle por WhatsApp a {action['contact']}, "
@@ -285,7 +322,7 @@ def _answer(request: AskRequest, name: str | None) -> dict:
         top = found["sources"][0]
         actions = []
         if top["kind"] == "servicio":
-            action = whatsapp_action(top["title"] if top["title"] in SOLUTIONS else None)
+            action = whatsapp_action(top["title"] if top["title"] in SOLUTIONS else None, name, history)
             if action:
                 actions = [action]
         return {"status": "ok", "source": "website", "intent": "answer", "answer": answer, "more": more,

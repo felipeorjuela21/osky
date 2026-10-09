@@ -18,7 +18,7 @@ Arquitectura de costo cero:
 
 ## 1. Subir el proyecto a GitHub
 
-1. Crea una cuenta en <https://github.com> y un repositorio **privado** llamado `oski` (sin README).
+1. Crea una cuenta en <https://github.com> y un repositorio llamado `osky` (sin README).
 2. En una terminal, dentro de la carpeta del proyecto:
 
 ```bash
@@ -26,7 +26,7 @@ git init
 git add .
 git commit -m "Osky: asistente de voz de CeluWeb"
 git branch -M main
-git remote add origin https://github.com/TU-USUARIO/oski.git
+git remote add origin https://github.com/TU-USUARIO/osky.git
 git push -u origin main
 ```
 
@@ -57,43 +57,43 @@ Las tablas se crean solas al arrancar.
 ## 4. Backend en Render
 
 1. Entra a <https://render.com> con tu cuenta de GitHub.
-2. **New → Blueprint** → elige el repositorio `oski`. Render lee `render.yaml` y crea el servicio `oski-api`.
+2. **New → Blueprint** → elige el repositorio `osky`. Render lee `render.yaml` y crea el servicio `osky-api`.
 3. Te pedirá:
    - `GROQ_API_KEY`: la clave del paso 2.
    - `AZURE_SPEECH_KEY`: la del paso 3 (o déjala vacía).
    - `DATABASE_URL`: la del paso 3b.
    - `CORS_ORIGINS`: déjala vacía por ahora (se completa en el paso 6).
-4. **Apply**. Cuando termine verás una dirección como `https://oski-api.onrender.com`.
-5. Prueba abriendo `https://oski-api.onrender.com/health` → debe decir `"status":"ok"`.
+4. **Apply**. Cuando termine verás una dirección como `https://osky-api.onrender.com`.
+5. Prueba abriendo `https://osky-api.onrender.com/health` → debe decir `"status":"ok"`.
 
 ## 5. Página en Cloudflare Pages
 
-1. <https://dash.cloudflare.com> → **Workers & Pages → Create → Pages → Connect to Git** → repositorio `oski`.
+1. <https://dash.cloudflare.com> → **Workers & Pages → Create → Pages → Connect to Git** → repositorio `osky`.
 2. Configuración de compilación:
    - **Framework preset:** Vite (o None)
    - **Root directory:** `frontend`
    - **Build command:** `npm run build`
    - **Build output directory:** `dist`
-   - **Variable de entorno:** `VITE_API_URL` = `https://oski-api.onrender.com` (la del paso 4)
-3. **Save and Deploy**. Quedará en algo como `https://oski.pages.dev`.
+   - **Variable de entorno:** `VITE_API_URL` = `https://osky-api.onrender.com` (la del paso 4)
+3. **Save and Deploy**. Quedará en algo como `https://osky.pages.dev`.
 
 ## 6. Conectar página y backend
 
-En Render → `oski-api` → **Environment** → `CORS_ORIGINS` = `https://oski.pages.dev`
-(si luego usas dominio propio, agrégalo separado por coma: `https://oski.pages.dev,https://oski.celuweb.com`).
+En Render → `osky-api` → **Environment** → `CORS_ORIGINS` = `https://osky.pages.dev`
+(si luego usas dominio propio, agrégalo separado por coma: `https://osky.pages.dev,https://osky.celuweb.com`).
 Guarda: Render se reinicia solo.
 
-Abre `https://oski.pages.dev` → ¡Osky está en línea! (`?modo=persona` abre directo el astronauta).
+Abre `https://osky.pages.dev` → ¡Osky está en línea! (`?modo=persona` abre directo el astronauta).
 
 ## 7. Que no se duerma (gratis)
 
 El plan gratis de Render se duerme tras 15 min sin visitas y tarda ~1 minuto en despertar.
-En <https://cron-job.org> crea un trabajo: URL `https://oski-api.onrender.com/health`, **cada 10 minutos**.
+En <https://cron-job.org> crea un trabajo: URL `https://osky-api.onrender.com/health`, **cada 10 minutos**.
 Las 750 horas gratis al mes alcanzan para tenerlo encendido 24/7.
 
-## 8. (Opcional) Dominio propio: oski.celuweb.com
+## 8. (Opcional) Dominio propio: osky.celuweb.com
 
-Cloudflare Pages → tu proyecto → **Custom domains → Set up a domain** → `oski.celuweb.com` y sigue las instrucciones
+Cloudflare Pages → tu proyecto → **Custom domains → Set up a domain** → `osky.celuweb.com` y sigue las instrucciones
 (crear un registro CNAME en el DNS de celuweb.com). Luego agrégalo a `CORS_ORIGINS` (paso 6).
 
 ## 9. Botón "Habla con Osky" en celuweb.com
@@ -120,8 +120,8 @@ Todo se edita en GitHub (botón ✏️ en cada archivo) y Render vuelve a public
 Osky pregunta el nombre al empezar y guarda cada conversación: nombre, fecha y hora, cada pregunta y respuesta,
 y a qué comercial se envió por WhatsApp.
 
-- Ver el registro: abre `https://oski.pages.dev/?admin=1` (tu dirección + `?admin=1`).
-- Te pedirá el `ADMIN_TOKEN`: en Render → `oski-api` → **Environment** → `ADMIN_TOKEN` → ver valor.
+- Ver el registro: abre `https://osky.pages.dev/?admin=1` (tu dirección + `?admin=1`).
+- Te pedirá el `ADMIN_TOKEN`: en Render → `osky-api` → **Environment** → `ADMIN_TOKEN` → ver valor.
 - **⬇ Exportar CSV** descarga todo para Excel (horas de Colombia).
 - Los visitantes ven un aviso con enlace a la política de datos de CeluWeb.
 

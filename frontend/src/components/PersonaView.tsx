@@ -444,7 +444,7 @@ export function PersonaView({ agent }: { agent: AgentInfo | null }) {
         )}
         {state !== "listening" && <SourceLabel source={source} className="captions__source" />}
         {/* WhatsApp buttons stay visible while Osky listens, so they can be tapped. */}
-        <ActionButtons actions={actions} />
+        <ActionButtons actions={actions} conversationId={conversationId.current} />
       </div>
 
       <div className="persona__controls">

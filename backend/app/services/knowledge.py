@@ -59,6 +59,17 @@ SYNONYMS = {
     "privacidad": ["dato", "personal", "politica"],
 }
 
+# Everyday words visitors use that may not appear on the website, so typos in them get fixed too.
+EXTRA_VOCABULARY = set(
+    """asesor asesores comercial comerciales cotizar cotizacion precio precios costo cuesta contratar comprar demo
+    whatsapp chatbot empleados empleado trabajadores colaboradores personal equipo vendedores controlar control
+    seguimiento supervisar monitorear pedidos entregas distribucion transporte vehiculos camiones logistica
+    cobrar cobros recaudo cartera pagos competencia mercado tenderos tienda clientes tecnicos mantenimiento
+    ubicacion necesito necesitamos quiero queremos busco buscamos empresa soluciones solucion servicios
+    contacto telefono correo direccion mision vision interesa interesado informacion conocer tienen ofrecen
+    funciona sirve ayuda ayudar celuweb""".split()
+)
+
 MIN_SCORE = 1.5
 # Official pages outrank blog posts when both mention the same thing.
 KIND_WEIGHT = {"dato": 1.5, "documento": 1.3, "servicio": 1.3, "contacto": 1.3, "empresa": 1.2, "politica": 1.0, "articulo": 0.8}
@@ -81,6 +92,24 @@ def stem(word: str) -> str:
     if word.endswith("s") and len(word) > 3:
         return word[:-1]
     return word
+
+def typo_distance(a: str, b: str, limit: int) -> int:
+    """Edits (insert, delete, change, swap two letters) to turn a into b; stops early past limit."""
+    if abs(len(a) - len(b)) > limit:
+        return limit + 1
+    prev2: list[int] = []
+    prev = list(range(len(b) + 1))
+    for i in range(1, len(a) + 1):
+        row = [i] + [0] * len(b)
+        for j in range(1, len(b) + 1):
+            cost = a[i - 1] != b[j - 1]
+            row[j] = min(prev[j] + 1, row[j - 1] + 1, prev[j - 1] + cost)
+            if i > 1 and j > 1 and a[i - 1] == b[j - 2] and a[i - 2] == b[j - 1]:
+                row[j] = min(row[j], prev2[j - 2] + 1)
+        if min(row) > limit:
+            return limit + 1
+        prev2, prev = prev, row
+    return prev[-1]
 
 def tokenize(text: str) -> list[str]:
     return [stem(w) for w in normalize(text).split() if w not in STOPWORDS and len(w) > 1]
@@ -111,6 +140,35 @@ class KnowledgeIndex:
         df = Counter(t for d in self.docs for t in d)
         n = len(chunks)
         self.idf = {t: math.log(1 + (n - f + 0.5) / (f + 0.5)) for t, f in df.items()}
+        # Words the agent knows, to fix typos ("presios" -> "precios", "pricin" -> "pricing").
+        self.frequency = Counter(w for c in chunks for w in normalize(f"{c.title} {c.content} {c.keywords}").split())
+        self.vocabulary = {w for w in set(self.frequency) | EXTRA_VOCABULARY | STOPWORDS if w.isalpha()}
+        self._by_length: dict[int, list[str]] = {}
+        for w in self.vocabulary:
+            self._by_length.setdefault(len(w), []).append(w)
+        self._fixes: dict[str, str] = {}
+
+    def correct(self, text: str) -> str:
+        """Fuzzy spelling: each unknown word becomes the closest known one, if it is 1-2 typos away."""
+        fixed = []
+        for word in normalize(text).split():
+            if len(word) < 5 or word in self.vocabulary or not word.isalpha():
+                fixed.append(word)
+                continue
+            if word not in self._fixes:
+                limit = 1 if len(word) < 7 else 2
+                best: tuple | None = None
+                for size in range(len(word) - limit, len(word) + limit + 1):
+                    for candidate in self._by_length.get(size, []):
+                        d = typo_distance(word, candidate, limit)
+                        if d <= limit:
+                            # Fewer typos first; then words visitors use; then the most common on the site.
+                            rank = (d, candidate not in EXTRA_VOCABULARY, -self.frequency[candidate])
+                            if best is None or rank < best[0]:
+                                best = (rank, candidate)
+                self._fixes[word] = best[1] if best else word
+            fixed.append(self._fixes[word])
+        return " ".join(fixed)
 
     def search(self, question: str, k: int = 3) -> list[tuple[float, Chunk]]:
         terms = expand(tokenize(question))

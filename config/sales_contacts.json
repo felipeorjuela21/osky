@@ -1,11 +1,11 @@
 {
-  "_ayuda": "Los 3 asesores comerciales a los que Osky envía por WhatsApp, por turnos. Completa name y phone y pon active en true. phone: número completo con indicativo y sin '+' (Colombia: 57 + celular, ej. 573001234567). solutions: soluciones que atiende (vacío = todas). La línea general (fallback) solo se usa si ningún asesor está activo. Los cambios se aplican sin reiniciar.",
-  "message": "Hola, vengo de Osky, el asistente virtual de CeluWeb. {interes}",
+  "_ayuda": "Los 3 asesores comerciales que Osky muestra al tocar el botón de WhatsApp (el visitante elige uno). Completa name, phone y photo y pon active en true. phone: número completo con indicativo y sin '+' (Colombia: 57 + celular, ej. 573001234567). photo: imagen cuadrada en frontend/public/comerciales/ (ej. /comerciales/maria.jpg) o una URL https; si falta se muestran sus iniciales. solutions: soluciones que atiende (aparece primero cuando el visitante pregunta por ellas; vacío = todas). La línea general (fallback) solo se usa si ningún asesor está activo. El mensaje de WhatsApp se arma solo con el nombre del visitante, las soluciones que le interesan y sus últimas preguntas. Los cambios se aplican sin reiniciar.",
   "contacts": [
     {
       "name": "Asesor comercial 1",
       "phone": "",
       "area": "Asesor comercial",
+      "photo": "",
       "solutions": [],
       "active": false
     },
@@ -13,6 +13,7 @@
       "name": "Asesor comercial 2",
       "phone": "",
       "area": "Asesor comercial",
+      "photo": "",
       "solutions": [],
       "active": false
     },
@@ -20,6 +21,7 @@
       "name": "Asesor comercial 3",
       "phone": "",
       "area": "Asesor comercial",
+      "photo": "",
       "solutions": [],
       "active": false
     },
@@ -27,6 +29,7 @@
       "name": "Línea comercial CeluWeb",
       "phone": "573104695891",
       "area": "Atención comercial",
+      "photo": "/oski.png",
       "solutions": [],
       "active": true,
       "fallback": true

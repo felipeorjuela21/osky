@@ -41,12 +41,21 @@ tiempos de cada palabra para mover los labios. Osky usa solo voces masculinas. S
 
 ### Asesores comerciales por WhatsApp
 Cuando alguien pide un asesor, una cotización o precios (o después de explicar una solución), Osky muestra un
-botón de WhatsApp con el mensaje ya escrito ("Hola, vengo de Osky… Me interesa TMS"). Los asesores se editan en
-**`config/sales_contacts.json`** (sin reiniciar):
+botón de WhatsApp que abre **"Elige tu asesor"**: los 3 comerciales con foto, lo que atiende cada uno y
+**Contáctame**. El mensaje ya va escrito con el nombre del visitante, las soluciones que le interesan y sus
+últimas preguntas. Los asesores se editan en **`config/sales_contacts.json`** (sin reiniciar):
 
 ```json
-{ "name": "Ana Pérez", "phone": "573001234567", "area": "Logística", "solutions": ["TMS", "Mapas"], "active": true }
+{ "name": "Ana Pérez", "phone": "573001234567", "area": "Logística", "photo": "/comerciales/ana.jpg",
+  "solutions": ["TMS", "Mapas"], "active": true }
 ```
+
+`photo`: imagen cuadrada en `frontend/public/comerciales/` (o una URL https); sin foto se muestran las iniciales.
+
+### Respuestas por necesidad y errores de escritura
+"Necesito controlar a mis empleados" o "algo para WhatsApp" no nombran un producto: Osky responde con las
+soluciones que lo cubren (lista en `backend/app/services/needs.py`, descripciones tomadas de celuweb.com).
+Las palabras mal escritas se corrigen con el vocabulario del sitio ("nesecito presios de pricin").
 
 `phone` va con indicativo y sin `+`. Con `solutions` vacío el asesor atiende todo; si varios asesores atienden lo
 mismo, Osky reparte las conversaciones entre ellos. Soluciones válidas: TMS, Pricing, Chat Bot, B2B, Field Service,

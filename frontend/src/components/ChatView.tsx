@@ -158,7 +158,7 @@ export function ChatView({ agent }: { agent: AgentInfo | null }) {
           {messages.map((m) => (
             <div key={m.id} className={`bubble bubble--${m.role} ${m.notFound ? "bubble--muted" : ""}`}>
               <p>{m.text}</p>
-              <ActionButtons actions={m.actions} />
+              <ActionButtons actions={m.actions} conversationId={conversationId.current} />
               <SourceLabel source={m.sources?.[0]} className="source" />
               {m.privacy && (
                 <p className="privacy-note">
