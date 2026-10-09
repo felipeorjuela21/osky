@@ -1,0 +1,17 @@
+services:
+  db:
+    image: postgres:16
+    container_name: enterprise-voice-agent-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: enterprise_agent
+      POSTGRES_USER: agent
+      POSTGRES_PASSWORD: agent
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./database/init.sql:/docker-entrypoint-initdb.d/001-init.sql:ro
+
+volumes:
+  postgres_data:

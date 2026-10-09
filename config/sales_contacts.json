@@ -1,0 +1,35 @@
+{
+  "_ayuda": "Los 3 asesores comerciales a los que Osky envía por WhatsApp, por turnos. Completa name y phone y pon active en true. phone: número completo con indicativo y sin '+' (Colombia: 57 + celular, ej. 573001234567). solutions: soluciones que atiende (vacío = todas). La línea general (fallback) solo se usa si ningún asesor está activo. Los cambios se aplican sin reiniciar.",
+  "message": "Hola, vengo de Osky, el asistente virtual de CeluWeb. {interes}",
+  "contacts": [
+    {
+      "name": "Asesor comercial 1",
+      "phone": "",
+      "area": "Asesor comercial",
+      "solutions": [],
+      "active": false
+    },
+    {
+      "name": "Asesor comercial 2",
+      "phone": "",
+      "area": "Asesor comercial",
+      "solutions": [],
+      "active": false
+    },
+    {
+      "name": "Asesor comercial 3",
+      "phone": "",
+      "area": "Asesor comercial",
+      "solutions": [],
+      "active": false
+    },
+    {
+      "name": "Línea comercial CeluWeb",
+      "phone": "573104695891",
+      "area": "Atención comercial",
+      "solutions": [],
+      "active": true,
+      "fallback": true
+    }
+  ]
+}

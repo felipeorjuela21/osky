@@ -1,0 +1,32 @@
+# Render Blueprint: backend de Osky en el plan gratuito.
+# Render -> New -> Blueprint -> elige este repositorio. Las claves marcadas con
+# "sync: false" se piden al crear el servicio (no se guardan en el repositorio).
+services:
+  - type: web
+    name: oski-api
+    runtime: python
+    plan: free
+    region: virginia            # la más cercana a Colombia
+    buildCommand: pip install -r backend/requirements.txt
+    startCommand: uvicorn backend.app.main:app --host 0.0.0.0 --port $PORT --proxy-headers --forwarded-allow-ips "*"
+    healthCheckPath: /health
+    autoDeploy: true            # cada cambio en GitHub (código o conocimiento) se publica solo
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.9
+      - key: APP_ENV
+        value: production
+      - key: GROQ_API_KEY       # https://console.groq.com/keys (gratis, sin tarjeta)
+        sync: false
+      - key: AZURE_SPEECH_KEY   # opcional: voz oficial gratis (F0). Vacío = voz gratuita alternativa
+        sync: false
+      - key: AZURE_SPEECH_REGION
+        value: eastus
+      - key: TTS_VOICE
+        value: es-CO-GonzaloNeural
+      - key: CORS_ORIGINS       # la URL de Cloudflare Pages, p. ej. https://oski.pages.dev
+        sync: false
+      - key: DATABASE_URL       # Neon (gratis): guarda el registro de conversaciones aunque Render reinicie.
+        sync: false             # formato: postgresql+psycopg://usuario:clave@host/neondb?sslmode=require
+      - key: ADMIN_TOKEN        # clave del registro de conversaciones (?admin=1) y de /api/knowledge/refresh
+        generateValue: true

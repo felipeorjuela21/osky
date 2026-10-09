@@ -1,0 +1,11 @@
+# Cloud server (Render free: 512 MB). Speech-to-text and natural answers use Groq's API.
+fastapi==0.115.12
+uvicorn[standard]==0.34.2
+sqlalchemy==2.0.40
+pydantic-settings==2.8.1
+python-dotenv==1.1.0
+httpx==0.28.1
+beautifulsoup4==4.13.4
+pypdf==5.4.0
+edge-tts==7.2.8
+psycopg[binary]==3.2.6

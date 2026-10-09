@@ -1,0 +1,4 @@
+id,customer_id,seller,amount,sale_date
+S001,001,Felipe,150000,2026-10-01
+S002,001,Laura,225000,2026-10-02
+S003,002,Felipe,100000,2026-10-03

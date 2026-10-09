@@ -1,0 +1,10 @@
+{
+  "_ayuda": "Datos oficiales de CeluWeb que no están en el sitio web y que Osky puede decir. keywords: palabras con las que la gente pregunta por ese dato. Los cambios se aplican sin reiniciar.",
+  "facts": [
+    {
+      "title": "Equipo CeluWeb",
+      "content": "En CeluWeb somos un equipo de más de 140 personas.",
+      "keywords": ["personas", "empleados", "colaboradores", "trabajadores", "equipo", "gente", "tamaño", "grande", "trabajan", "somos"]
+    }
+  ]
+}

@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+  <!-- Placeholder: replace with public/oski.png (the official Oski logo) -->
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffe14d"/>
+      <stop offset="1" stop-color="#f9cf00"/>
+    </linearGradient>
+  </defs>
+  <circle cx="100" cy="100" r="92" fill="url(#g)"/>
+  <circle cx="100" cy="100" r="92" fill="none" stroke="#14253d" stroke-width="6"/>
+  <text x="100" y="128" text-anchor="middle" font-family="Montserrat, Arial, sans-serif" font-size="84" font-weight="800" fill="#14253d">O</text>
+</svg>

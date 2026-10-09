@@ -1,0 +1,122 @@
+/* Articulated Oski. Pivots (%) come from frontend/scripts/build_rig.py.
+   Keyframes animate `transform`; live values use the independent `rotate` /
+   `translate` properties, so both combine around the same joint. */
+
+:root { --talk: 0; --mic: 0; --look-x: 0; --look-y: 0; }
+
+.rig {
+  position: relative; width: 100%; height: 100%;
+  transform: perspective(1400px) rotateY(calc(var(--look-x) * 7deg)) rotateX(calc(var(--look-y) * -4deg));
+  filter: drop-shadow(-10px 6px 18px rgba(80, 150, 255, 0.28)) drop-shadow(0 26px 30px rgba(0, 0, 0, 0.5));
+}
+.rig__part { position: absolute; inset: 0; width: 100%; height: 100%; user-select: none; pointer-events: none; }
+img.rig__part { object-fit: contain; }
+
+.rig__leg-back  { transform-origin: 55.09% 72.69%; animation: leg-back 7.5s ease-in-out infinite; }
+.rig__leg-front { transform-origin: 68.98% 63.89%; animation: leg-front 6s ease-in-out infinite; }
+.rig__arm-right { transform-origin: 58.15% 35.19%; animation: armR-idle 8s ease-in-out -2s infinite; }
+.rig__arm-left  { transform-origin: 37.5% 42.13%;  animation: armL-idle 7s ease-in-out infinite; }
+.rig__hand      { transform-origin: 16.48% 31.3%;  animation: hand-idle 5s ease-in-out infinite; }
+.rig__helmet {
+  transform-origin: 41.48% 28.24%;
+  animation: head-idle 9s ease-in-out infinite;
+  rotate: calc(var(--talk) * 2.5deg);
+  translate: calc(var(--look-x) * 4px) calc(var(--look-y) * 3px + var(--talk) * 3px);
+}
+
+/* ---- idle: drifting in zero gravity, limbs out of sync like a real body ---- */
+@keyframes leg-back  { 50% { transform: rotate(-2deg); } }
+@keyframes leg-front { 50% { transform: rotate(2.5deg); } }
+@keyframes armR-idle { 50% { transform: rotate(-3deg); } }
+@keyframes armL-idle { 50% { transform: rotate(4deg); } }
+@keyframes hand-idle { 50% { transform: rotate(-7deg); } }
+@keyframes head-idle { 0%, 100% { transform: rotate(-1.5deg); } 50% { transform: rotate(1.5deg); } }
+
+/* ---- listening: attentive, head tilted towards you, body calm ---- */
+.rig--listening .rig__helmet { animation: head-listen 5s ease-in-out infinite; rotate: calc(var(--mic) * -2deg); }
+.rig--listening .rig__arm-right { animation: armR-listen 6s ease-in-out infinite; }
+.rig--listening .rig__arm-left { animation: armL-listen 6.5s ease-in-out infinite; }
+.rig--listening .rig__hand { animation: hand-listen 4s ease-in-out infinite; }
+@keyframes head-listen { 0%, 100% { transform: rotate(-4deg); } 50% { transform: rotate(-3deg) translateY(2px); } }
+@keyframes armR-listen { 0%, 100% { transform: rotate(2deg); } 50% { transform: rotate(3deg); } }
+@keyframes armL-listen { 0%, 100% { transform: rotate(-2deg); } 50% { transform: rotate(-1deg); } }
+@keyframes hand-listen { 0%, 100% { transform: rotate(6deg); } 50% { transform: rotate(9deg); } }
+
+/* ---- thinking: head tilted, fingers drumming ---- */
+.rig--thinking .rig__helmet { animation: head-think 2.4s ease-in-out infinite; }
+.rig--thinking .rig__arm-left { animation: armL-think 2.4s ease-in-out infinite; }
+.rig--thinking .rig__hand { animation: hand-drum 0.55s ease-in-out infinite; }
+.rig--thinking .rig__arm-right { animation: armR-think 3s ease-in-out infinite; }
+@keyframes head-think { 0%, 100% { transform: rotate(5deg); } 50% { transform: rotate(7deg) translateY(-2px); } }
+@keyframes armL-think { 0%, 100% { transform: rotate(-4deg); } 50% { transform: rotate(-2deg); } }
+@keyframes hand-drum { 0%, 100% { transform: rotate(10deg); } 50% { transform: rotate(18deg); } }
+@keyframes armR-think { 0%, 100% { transform: rotate(3deg); } 50% { transform: rotate(4deg); } }
+
+/* ---- speaking: talking with the hands ---- */
+.rig--speaking .rig__arm-right { animation: armR-talk 2.6s ease-in-out infinite; rotate: calc(var(--talk) * -1.5deg); }
+.rig--speaking .rig__arm-left { animation: armL-talk 3.1s ease-in-out infinite; rotate: calc(var(--talk) * 1.5deg); }
+.rig--speaking .rig__hand { animation: hand-talk 1.9s ease-in-out infinite; }
+.rig--speaking .rig__helmet { animation: head-talk 3.4s ease-in-out infinite; }
+@keyframes armR-talk {
+  0%, 100% { transform: rotate(0); } 25% { transform: rotate(-5deg); }
+  45% { transform: rotate(1deg); } 70% { transform: rotate(-3.5deg); }
+}
+@keyframes armL-talk { 0%, 100% { transform: rotate(0); } 40% { transform: rotate(5deg); } 75% { transform: rotate(1deg); } }
+@keyframes hand-talk { 0%, 100% { transform: rotate(0); } 30% { transform: rotate(-11deg); } 60% { transform: rotate(7deg); } }
+@keyframes head-talk { 0%, 100% { transform: rotate(-1deg); } 50% { transform: rotate(1.5deg); } }
+
+/* ---- one-shot gestures (declared last so they win over the state) ---- */
+.rig--g-wave .rig__arm-left { animation: armL-wave 1.8s ease-in-out; }
+.rig--g-wave .rig__hand { animation: hand-wave 1.8s ease-in-out; }
+@keyframes armL-wave { 0%, 100% { transform: rotate(0); } 15%, 85% { transform: rotate(13deg); } }
+@keyframes hand-wave {
+  0%, 100% { transform: rotate(0); }
+  20% { transform: rotate(-22deg); } 33% { transform: rotate(20deg); } 46% { transform: rotate(-22deg); }
+  59% { transform: rotate(20deg); } 72% { transform: rotate(-18deg); } 85% { transform: rotate(8deg); }
+}
+.rig--g-nod .rig__helmet { animation: head-nod 0.9s ease-in-out; }
+@keyframes head-nod {
+  0%, 100% { transform: rotate(0) translateY(0); } 30% { transform: rotate(3deg) translateY(6px); }
+  55% { transform: rotate(-1deg) translateY(-2px); } 75% { transform: rotate(2deg) translateY(3px); }
+}
+.rig--g-shrug .rig__arm-left { animation: armL-shrug 1.3s ease-in-out; }
+.rig--g-shrug .rig__arm-right { animation: armR-shrug 1.3s ease-in-out; }
+.rig--g-shrug .rig__helmet { animation: head-shrug 1.3s ease-in-out; }
+@keyframes armL-shrug { 0%, 100% { transform: rotate(0); } 35%, 60% { transform: rotate(7deg); } }
+@keyframes armR-shrug { 0%, 100% { transform: rotate(0); } 35%, 60% { transform: rotate(-5deg); } }
+@keyframes head-shrug { 0%, 100% { transform: rotate(0); } 35%, 60% { transform: rotate(6deg); } }
+
+/* ---- thruster puffs from the backpack now and then ---- */
+.rig__puffs { position: absolute; left: 67%; top: 21%; width: 0; height: 0; }
+.rig__puffs i {
+  position: absolute; width: 18px; height: 18px; margin: -9px; border-radius: 50%; opacity: 0;
+  background: radial-gradient(circle, rgba(255, 255, 255, 0.85), rgba(200, 220, 255, 0.25) 55%, transparent 70%);
+  animation: puff 11s ease-out 4s infinite;
+}
+.rig__puffs i:nth-child(2) { animation-delay: 4.12s; }
+.rig__puffs i:nth-child(3) { animation-delay: 4.24s; }
+@keyframes puff {
+  0% { opacity: 0; transform: translate(0, 0) scale(0.4); }
+  1% { opacity: 0.9; }
+  7% { opacity: 0; transform: translate(70px, -26px) scale(3.2); }
+  100% { opacity: 0; transform: translate(70px, -26px) scale(3.2); }
+}
+
+/* ---- visor glow (tilted ellipse over the gold visor, see build_rig.py VISOR) ---- */
+.rig__visor-glow {
+  position: absolute; left: 31.1%; top: 21.1%; width: 20.2%; height: 18.1%; border-radius: 50%;
+  rotate: -12deg; pointer-events: none; mix-blend-mode: screen; opacity: 0;
+  background: radial-gradient(circle at 45% 45%, rgba(255, 244, 200, 0.95), rgba(249, 207, 0, 0.45) 45%, transparent 72%);
+  transition: opacity 0.3s ease;
+}
+.rig--speaking .rig__visor-glow { opacity: calc(0.12 + var(--talk) * 0.85); transition: none; }
+.rig--listening .rig__visor-glow {
+  opacity: calc(0.1 + var(--mic) * 0.8); transition: none;
+  background: radial-gradient(circle at 45% 45%, rgba(210, 255, 230, 0.9), rgba(95, 189, 116, 0.45) 45%, transparent 72%);
+}
+.rig--thinking .rig__visor-glow { animation: visor-think 1.2s ease-in-out infinite; }
+@keyframes visor-think { 0%, 100% { opacity: 0.08; } 50% { opacity: 0.5; } }
+
+@media (prefers-reduced-motion: reduce) {
+  .rig *, .rig { animation: none !important; }
+}
