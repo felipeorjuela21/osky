@@ -73,6 +73,7 @@ app.include_router(router)
 
 @app.get("/health")
 def health():
+    from backend.app.services import llm
     from backend.app.services.stt import is_ready
 
     return {
@@ -80,4 +81,6 @@ def health():
         "service": "enterprise-voice-data-agent",
         "agent": settings.agent_name,
         "stt_ready": is_ready(),
+        # Natural answers (Groq): model in use and last error, to diagnose without the server logs.
+        "llm": {"provider": settings.effective_llm, **llm.status},
     }
