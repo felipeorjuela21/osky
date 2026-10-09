@@ -11,6 +11,7 @@ def _response(status: int, body: dict, url: str) -> httpx.Response:
 def test_retired_model_switches_to_an_available_one(monkeypatch):
     monkeypatch.setattr(settings, "groq_api_key", "test-key")
     monkeypatch.setattr(settings, "llm_provider", "groq")
+    monkeypatch.setattr(settings, "llm_model", "llama-3.3-70b-versatile")  # retired by Groq
     llm.status.update(model=None, ok=None, error=None)
     used = []
 

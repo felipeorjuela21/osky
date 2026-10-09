@@ -45,12 +45,14 @@ def _available_model(exclude: str | None = None) -> str | None:
     return chat[0] if chat else None
 
 def _chat(model: str, messages: list[dict]) -> httpx.Response:
-    return httpx.post(
-        GROQ_CHAT_URL,
-        headers=_headers(),
-        json={"model": model, "temperature": 0.3, "max_tokens": 220, "messages": messages},
-        timeout=8,
-    )
+    payload = {"model": model, "temperature": 0.3, "max_tokens": 220, "messages": messages}
+    # Reasoning models think before answering; that thinking counts as tokens.
+    # Keep it short (fast answers) and leave room so the answer is never cut off.
+    if "gpt-oss" in model:
+        payload.update(reasoning_effort="low", max_tokens=900)
+    elif "qwen3" in model:
+        payload.update(reasoning_effort="none", max_tokens=600)
+    return httpx.post(GROQ_CHAT_URL, headers=_headers(), json=payload, timeout=10)
 
 def _complete(messages: list[dict]) -> str:
     model = status["model"] or settings.llm_model
@@ -63,8 +65,12 @@ def _complete(messages: list[dict]) -> str:
             model = replacement
             response = _chat(model, messages)
     response.raise_for_status()
+    choice = response.json()["choices"][0]
+    content = (choice["message"].get("content") or "").strip()
+    if not content or choice.get("finish_reason") == "length":
+        raise ValueError(f"respuesta vacía o cortada (finish_reason={choice.get('finish_reason')})")
     status.update(model=model, ok=True, error=None)
-    return response.json()["choices"][0]["message"]["content"].strip()
+    return content
 
 def _error_text(exc: Exception) -> str:
     if isinstance(exc, httpx.HTTPStatusError):

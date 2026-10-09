@@ -16,7 +16,7 @@ class Settings(BaseSettings):
     # Groq (free tier): speech-to-text with Whisper and natural answers with Llama.
     groq_api_key: str = ""
     groq_stt_model: str = "whisper-large-v3-turbo"
-    llm_model: str = "llama-3.3-70b-versatile"
+    llm_model: str = "openai/gpt-oss-120b"  # llama-3.3-70b-versatile was retired by Groq
     # Natural answers: "groq" rewrites the retrieved company text conversationally
     # (never adding facts); "none" reads the extracts. "auto" = groq if a key exists.
     llm_provider: str = "auto"
