@@ -1,0 +1,10 @@
+// Cloudflare Workers (static site): publishes the built page (dist/).
+// Build settings in Cloudflare: root directory "frontend", build "npm run build", deploy "npx wrangler deploy".
+{
+  "name": "osky",
+  "compatibility_date": "2025-10-01",
+  "assets": {
+    "directory": "./dist",
+    "not_found_handling": "single-page-application"
+  }
+}
