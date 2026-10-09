@@ -16,3 +16,5 @@ data/models/
 *.tsbuildinfo
 frontend/.vite/
 data/*.mp3
+render.env
+*.env.local
