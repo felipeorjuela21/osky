@@ -2,7 +2,7 @@
    frame, so the astronaut moves with the real voice (not an estimate). */
 
 import { speakText } from "./speech";
-import { Speech, base64ToArrayBuffer, playSpeech } from "./voice";
+import { Speech, base64ToArrayBuffer, playSpeech, setAudioSession, unlockMediaElement } from "./voice";
 
 export type Playback = { done: Promise<void>; cancel: () => void };
 
@@ -15,6 +15,7 @@ function audioContext(): AudioContext {
 
 /** Call inside a click handler: browsers only allow audio after a user action. */
 export function unlockAudio() {
+  unlockMediaElement(); // iPhone: speaker + silent switch, and the fallback player
   const c = audioContext();
   void c.resume();
   try {
@@ -51,6 +52,7 @@ export async function speakWithLevels(
   speech: Speech | null,
   { onLevel, onWord }: { onLevel?: (level: number) => void; onWord?: (index: number) => void } = {},
 ): Promise<Playback> {
+  setAudioSession("playback"); // after the mic, iOS would keep the earpiece
   const c = audioContext();
   if (c.state !== "running") {
     await Promise.race([c.resume(), new Promise((r) => window.setTimeout(r, 1200))]);

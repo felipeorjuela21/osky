@@ -78,9 +78,52 @@ export function wordOffsets(text: string, words: SpeechWord[]): number[] {
   });
 }
 
-/** Plays neural speech with a plain <audio> element (chat mode). */
+/* iPhone/iPad (Safari and Chrome are both WebKit there):
+   - the silent switch mutes Web Audio unless the page declares "playback";
+   - an <audio> element may only play later if it was first played inside a tap.
+   So one element is unlocked on the first tap and reused for every answer. */
+type AudioSessionType = "auto" | "playback" | "play-and-record";
+export function setAudioSession(type: AudioSessionType) {
+  try {
+    const session = (navigator as Navigator & { audioSession?: { type: string } }).audioSession;
+    if (session) session.type = type;
+  } catch {
+    /* not supported: nothing to do */
+  }
+}
+
+const SILENT_WAV = "data:audio/wav;base64,UklGRrQBAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YZABAACAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICA"; // 50 ms of silence
+let element: HTMLAudioElement | null = null;
+let elementUnlocked = false;
+
+function sharedElement(): HTMLAudioElement {
+  if (!element) {
+    element = new Audio();
+    element.setAttribute("playsinline", "");
+    element.preload = "auto";
+  }
+  return element;
+}
+
+/** Call inside a tap/click. Unlocks the shared <audio> element once. */
+export function unlockMediaElement() {
+  setAudioSession("playback");
+  if (elementUnlocked) return;
+  const audio = sharedElement();
+  audio.src = SILENT_WAV;
+  void audio.play().then(
+    () => (elementUnlocked = true),
+    () => undefined,
+  );
+}
+
+/** Plays neural speech with the shared <audio> element (chat mode, and fallback for persona mode). */
 export function playSpeech(speech: Speech, onWord?: (index: number) => void) {
-  const audio = new Audio(`data:audio/mpeg;base64,${speech.audio}`);
+  setAudioSession("playback");
+  const audio = sharedElement();
+  finishCurrent(); // the element is shared: whatever was playing ends here
+  audio.pause();
+  audio.src = `data:audio/mpeg;base64,${speech.audio}`;
   const timers: number[] = [];
   const clear = () => timers.splice(0).forEach((t) => window.clearTimeout(t));
   let resolveDone: () => void = () => {};
@@ -88,7 +131,9 @@ export function playSpeech(speech: Speech, onWord?: (index: number) => void) {
   const finish = () => {
     clear();
     resolveDone();
+    if (finishCurrent === finish) finishCurrent = () => {};
   };
+  finishCurrent = finish;
   audio.onplay = () => speech.words.forEach((w, i) => timers.push(window.setTimeout(() => onWord?.(i), w.start * 1000)));
   audio.onended = finish;
   audio.onerror = finish;
@@ -104,8 +149,10 @@ export function playSpeech(speech: Speech, onWord?: (index: number) => void) {
     done,
     started,
     cancel: () => {
-      audio.pause();
+      if (finishCurrent === finish) audio.pause();
       finish();
     },
   };
 }
+
+let finishCurrent: () => void = () => {};

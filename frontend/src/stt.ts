@@ -1,3 +1,4 @@
+import { setAudioSession } from "./voice";
 import { apiUrl } from "./api";
 /* Listening to the user: records one turn from the microphone, detects when the
    person starts and stops talking, and transcribes it with Whisper on our server
@@ -45,6 +46,7 @@ export const canRecord = Boolean(navigator.mediaDevices) && "MediaRecorder" in w
 
 /** Opens the chosen microphone (or the default one). */
 export async function openMic(): Promise<MediaStream> {
+  setAudioSession("play-and-record"); // iPhone: recording needs this session (speech switches back to "playback")
   const id = getMicId();
   const audio: MediaTrackConstraints = { echoCancellation: true, noiseSuppression: true, autoGainControl: true };
   try {
@@ -179,6 +181,7 @@ export function listenTurn(opts: ListenOptions = {}): ListenHandle {
     recorder.stop();
     await stopped;
     stream.getTracks().forEach((t) => t.stop());
+    setAudioSession("playback"); // back to the loudspeaker for Osky's answer
     meter.close();
     opts.onLevel?.(0);
 

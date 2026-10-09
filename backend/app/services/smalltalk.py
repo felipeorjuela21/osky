@@ -27,6 +27,9 @@ def _replies() -> dict[str, list[str]]:
             f"Soy {name}, el asistente virtual de {company}. Respondo con la información oficial de la empresa: "
             "sus soluciones, quiénes somos y cómo contactarnos.",
         ],
+        "creator": [
+            f"Me creó el equipo de desarrollo de {company}, con Juan Felipe Orjuela.",
+        ],
         "help": [
             f"Puedo contarte sobre las soluciones de {company}, como TMS, Pricing, Chat Bot o Fuerza de Ventas, "
             "sobre nuestra misión y visión, o darte los datos de contacto. ¿Por dónde empezamos?",
@@ -46,6 +49,8 @@ PATTERNS = [
     ("thanks", r"^(muchas gracias|mil gracias|gracias|perfecto|listo|vale|ok|okey|genial|excelente|muy bien)( gracias)?( osk[iy])?$"),
     ("how_are_you", r"^(como estas|como vas|como te va|que tal|como andas)( osk[iy])?$"),
     ("identity", r"^(quien eres|que eres|como te llamas|cual es tu nombre|tu quien eres|presentate)( osk[iy])?$"),
+    ("creator", r"\bquien(es)? te (creo|crearon|hizo|hicieron|desarrollo|desarrollaron|programo|programaron|diseno|disenaron)\b"
+                r"|\btu(s)? (creador|creadores|desarrollador|desarrolladores|programador|programadores)\b"),
     ("help", r"^(que puedes hacer|en que me (puedes )?ayudar|que sabes|ayuda|que te puedo preguntar|que me puedes decir)( osk[iy])?$"),
     ("greeting", rf"^{GREETING}( osk[iy])?$"),
 ]
