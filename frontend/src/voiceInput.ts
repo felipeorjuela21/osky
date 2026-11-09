@@ -18,16 +18,36 @@ export type InputMode = "off" | "listening" | "thinking" | "speaking";
 
 const IOS =
   /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
-/** Interrupting Osky by voice (not on iOS, see above). */
+/** Interrupting Osky by voice is possible here (not on iOS, see above). */
 export const canBargeIn = !IOS;
+
+/* Off by default: to hear you over Osky the microphone must stay open while he talks,
+   and Windows, macOS and Android then lower ("duck") every other sound, so Osky's
+   voice drops. With headphones it works well. Turned on in 🎙️ Voz. */
+const BARGE_IN_KEY = "oski.bargeIn";
+export function bargeInEnabled(): boolean {
+  try {
+    return canBargeIn && localStorage.getItem(BARGE_IN_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+export function setBargeIn(on: boolean) {
+  try {
+    localStorage.setItem(BARGE_IN_KEY, on ? "1" : "0");
+  } catch {
+    /* private mode: not remembered */
+  }
+}
 
 const ASSETS = `${import.meta.env.BASE_URL}vad/`;
 
-// Your turn: normal sensitivity; the turn ends after 0.8 s of silence.
-const LISTEN = { positiveSpeechThreshold: 0.5, negativeSpeechThreshold: 0.35, redemptionMs: 800 };
+// Your turn: normal sensitivity; the turn ends after 1.2 s of silence, so the
+// natural pauses of a long question don't cut it.
+const LISTEN = { positiveSpeechThreshold: 0.5, negativeSpeechThreshold: 0.35, redemptionMs: 1200 };
 // While Osky talks: only clear, sustained speech counts, so his own voice
 // (if the echo canceller lets some through) or a cough don't interrupt him.
-const OVER_OSKY = { positiveSpeechThreshold: 0.8, negativeSpeechThreshold: 0.6, redemptionMs: 800 };
+const OVER_OSKY = { positiveSpeechThreshold: 0.8, negativeSpeechThreshold: 0.6, redemptionMs: 1200 };
 const BARGE_IN_PROB = 0.85;
 // localStorage "oski.debugVad" = "1" logs the detector's decisions in the console.
 const DEBUG = (() => {
@@ -99,16 +119,16 @@ export class VoiceInput {
       await this.run(true);
     } else if (mode === "speaking") {
       this.vad.setOptions(OVER_OSKY);
-      await this.run(canBargeIn);
+      await this.run(bargeInEnabled());
     } else {
-      await this.run(mode === "thinking" && canBargeIn);
+      await this.run(mode === "thinking" && bargeInEnabled());
     }
   }
 
   /** Waits for the visitor's next utterance and transcribes it. "" = silence or cancelled. */
   listen(opts: { onPhase?: (phase: ListenPhase) => void; onError?: (message: string, blocked?: boolean) => void; maxWaitMs?: number; maxTurnMs?: number } = {}): ListenHandle {
     const maxWaitMs = opts.maxWaitMs ?? 9000;
-    const maxTurnMs = opts.maxTurnMs ?? 20000;
+    const maxTurnMs = opts.maxTurnMs ?? 45000;
     let aborted = false;
     let settle: (audio: Float32Array | null) => void = () => {};
     const timers: number[] = [];
@@ -204,7 +224,7 @@ export class VoiceInput {
       return;
     }
     if (DEBUG && probability > 0.3) console.debug("vad", this.mode, probability.toFixed(2), this.loudMs, JSON.stringify(this.segment));
-    if (this.mode !== "speaking" || !canBargeIn || this.segment.bargedIn || !this.segment.active) return;
+    if (this.mode !== "speaking" || !bargeInEnabled() || this.segment.bargedIn || !this.segment.active) return;
     // Clear speech accumulated in this utterance. Natural speech has short dips between
     // syllables, so they don't reset or subtract (that made barge-in almost never fire).
     if (probability > BARGE_IN_PROB) this.loudMs += ms;

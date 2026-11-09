@@ -94,8 +94,28 @@ Reglas estrictas:
 - No menciones la palabra "contexto" ni que estás leyendo documentos.
 - La conversación anterior solo sirve para entender a qué se refiere la persona (por ejemplo "¿y eso cuánto cuesta?"); los datos salen del CONTEXTO.
 - Ve directo a la respuesta: no repitas la pregunta ni vuelvas a saludar.
+- Solo hablas de {company}: sus soluciones y servicios, la empresa, cómo contactarla o trabajar con ella. Las preguntas sobre los temas que cubren sus soluciones (ventas, distribución, logística, precios, WhatsApp, fuerza de ventas...) sí son del tema.
+- Si la pregunta es de otro tema (deportes, política, noticias, recetas, salud, tareas, programación, otras empresas, cultura general...), responde únicamente: FUERA_DE_TEMA
+- Si la pregunta trata de sexo, prostitución, menores de edad, drogas, armas, violencia, odio, delitos o autolesiones, responde únicamente: CONTENIDO_PROHIBIDO
 - {length}
 - Texto plano: sin markdown, sin viñetas, sin emojis."""
+
+# What the model answers instead of a reply (see SYSTEM); the routes turn them into
+# a polite refusal (off-topic) or close the conversation (forbidden).
+OFF_TOPIC = "FUERA_DE_TEMA"
+FORBIDDEN = "CONTENIDO_PROHIBIDO"
+_TAGS = [(re.compile(r"FUERA[_ ]DE[_ ]TEMA", re.I), OFF_TOPIC), (re.compile(r"CONTENIDO[_ ]PROHIBIDO", re.I), FORBIDDEN)]
+
+def _tag(text: str) -> str | None:
+    for regex, tag in _TAGS:
+        if regex.search(text):
+            return tag
+    return None
+
+def _may_become_tag(text: str) -> bool:
+    """The start of the answer could still be one of the tags: wait before speaking it."""
+    start = text.strip().upper().replace(" ", "_")
+    return bool(start) and any(t.startswith(start[:len(t)]) for t in (OFF_TOPIC, FORBIDDEN))
 
 LENGTH = {
     "voice": ("Se va a escuchar en voz alta, como en una llamada: máximo 2 frases cortas (unas 35 palabras), "
@@ -137,6 +157,9 @@ def natural_answer(question: str, context: list[dict], style: str = "chat",
 
     # Reasoning models may prepend their thinking: keep only the answer.
     answer = re.sub(r"<think>.*?</think>", "", answer, flags=re.S).strip()
+    tag = _tag(answer)
+    if tag:
+        return tag
     # Guard: every number in the answer must exist in the sources.
     invented = _numbers(answer) - _numbers(sources)
     if invented:
@@ -189,9 +212,12 @@ def stream_natural_answer(question: str, context: list[dict], style: str = "voic
     messages, sources = _prompt(question, context, style, history)
     allowed = _numbers(sources)
     model = status["model"] or settings.llm_model
-    buffer, thinking, finish = "", False, None
+    buffer, thinking, finish, said = "", False, None, False
 
     def checked(sentence: str) -> str | None:
+        tag = _tag(sentence)
+        if tag:
+            return tag
         sentence = re.sub(r"[*_#`]", "", sentence).strip()
         invented = _numbers(sentence) - allowed
         if invented:
@@ -211,13 +237,18 @@ def stream_natural_answer(question: str, context: list[dict], style: str = "voic
                     if "</think>" not in buffer:
                         continue
                     buffer, thinking = buffer.split("</think>", 1)[1].lstrip(), False
+                if not said and len(buffer.strip()) < 25 and _may_become_tag(buffer):
+                    continue  # "FUERA_DE..." is not spoken
                 sentences, buffer = _sentences(buffer)
                 for sentence in sentences:
                     ok = checked(sentence)
                     if ok is None:
                         return
                     if ok:
+                        said = True
                         yield ok
+                        if ok in (OFF_TOPIC, FORBIDDEN):
+                            return
             break
         except httpx.HTTPStatusError as exc:
             # Model retired or renamed (nothing was said yet): ask Groq which ones exist and retry once.

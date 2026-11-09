@@ -13,7 +13,18 @@ export type Action = {
 export type AskResponse = {
   status: "ok" | "not_found" | "not_understood" | "rejected" | "blocked";
   source: "website" | "database" | "persona" | null;
-  intent: "answer" | "not_found" | "sales" | "greeting" | "how_are_you" | "identity" | "help" | "thanks" | "goodbye" | "blocked";
+  intent:
+    | "answer"
+    | "not_found"
+    | "off_topic"
+    | "sales"
+    | "greeting"
+    | "how_are_you"
+    | "identity"
+    | "help"
+    | "thanks"
+    | "goodbye"
+    | "blocked";
   answer: string;
   /** Rest of the answer when style is "voice" (offered with "¿te cuento más?"). */
   more?: string;
@@ -56,6 +67,9 @@ const post = <T,>(path: string, body: unknown) =>
 
 /** topic: subject of the previous answer, so "quiero cotizar" reaches the right advisor.
     conversationId: personalises with the visitor's name and logs the turn. */
+/** Longest question the server accepts (a long spoken question is ~500 characters). */
+export const MAX_QUESTION = 1000;
+
 export const ask = (
   question: string,
   style: "chat" | "voice" = "chat",
@@ -64,11 +78,11 @@ export const ask = (
   history: Turn[] = [],
 ) =>
   post<AskResponse>("/api/ask", {
-    question,
+    question: question.slice(0, MAX_QUESTION),
     style,
     topic: topic || undefined,
     conversation_id: conversationId || undefined,
-    history: history.slice(-3).map((t) => ({ q: t.q.slice(0, 500), a: t.a.slice(0, 2000) })),
+    history: history.slice(-3).map((t) => ({ q: t.q.slice(0, MAX_QUESTION), a: t.a.slice(0, 2000) })),
   });
 
 export type AskMeta = Pick<AskResponse, "status" | "source" | "intent" | "sources" | "actions" | "ended" | "name">;
@@ -84,11 +98,11 @@ export async function askStream(
   history: Turn[] = [],
 ): Promise<AskResponse> {
   const body = {
-    question,
+    question: question.slice(0, MAX_QUESTION),
     style: "voice",
     topic: topic || undefined,
     conversation_id: conversationId || undefined,
-    history: history.slice(-3).map((t) => ({ q: t.q.slice(0, 500), a: t.a.slice(0, 2000) })),
+    history: history.slice(-3).map((t) => ({ q: t.q.slice(0, MAX_QUESTION), a: t.a.slice(0, 2000) })),
   };
   const response = await fetch(apiUrl("/api/ask/stream"), {
     method: "POST",
@@ -134,7 +148,7 @@ export const startConversation = (channel: "chat" | "persona") =>
   post<{ id: string; greeting: string; privacy_url: string }>("/api/conversations", { channel });
 
 export const sendName = (conversationId: string, text: string, attempt: number) =>
-  post<NameResult>(`/api/conversations/${conversationId}/name`, { text, attempt });
+  post<NameResult>(`/api/conversations/${conversationId}/name`, { text: text.slice(0, 300), attempt });
 
 /** Logs a turn answered in the page itself (e.g. "¿Te cuento más?" -> "sí"). Never blocks the chat. */
 export const logTurn = (conversationId: string | null, question: string, answer: string, intent?: string) => {

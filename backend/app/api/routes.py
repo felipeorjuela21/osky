@@ -17,9 +17,9 @@ from backend.app.services import conversations
 from backend.app.services.answer import build_answer
 from backend.app.services.knowledge import answer_from_knowledge, get_index, knowledge_stats, split_for_voice
 from backend.app.services.needs import recommend
-from backend.app.services.moderation import closing_message, is_offensive
+from backend.app.services.moderation import classify, closing_message, end_reason
 from backend.app.services.privacy import redact
-from backend.app.services.llm import natural_answer, stream_natural_answer
+from backend.app.services.llm import FORBIDDEN, OFF_TOPIC, natural_answer, stream_natural_answer
 from backend.app.services.stt import STTUnavailable, transcribe
 from backend.app.services.tts import TTSUnavailable, allowed_voice, spanish_voices, synthesize
 from backend.app.services.sales import SOLUTIONS, STRONG_INTENT, detect_solution, is_sales_request, whatsapp_action
@@ -45,11 +45,11 @@ HELP_TEXT = (
 )
 
 class Turn(BaseModel):
-    q: str = Field(..., max_length=500)
+    q: str = Field(..., max_length=1000)
     a: str = Field(..., max_length=2000)
 
 class AskRequest(BaseModel):
-    question: str = Field(..., min_length=1, max_length=500)
+    question: str = Field(..., min_length=1, max_length=1000)
     # "voice": short spoken answer, the rest is returned in "more".
     style: Literal["chat", "voice"] = "chat"
     # Topic of the previous answer (e.g. "TMS"), so "quiero cotizar" goes to the right advisor.
@@ -69,14 +69,14 @@ class StartConversation(BaseModel):
     channel: Literal["chat", "persona"] = "chat"
 
 class NameRequest(BaseModel):
-    text: str = Field(..., min_length=1, max_length=120)
+    text: str = Field(..., min_length=1, max_length=300)
     attempt: int = Field(default=1, ge=1, le=5)
 
 class ContactChoice(BaseModel):
     advisor: str = Field(..., min_length=1, max_length=120)
 
 class LogTurn(BaseModel):
-    question: str = Field(..., min_length=1, max_length=500)
+    question: str = Field(..., min_length=1, max_length=1000)
     answer: str = Field(..., min_length=1, max_length=2000)
     intent: str | None = Field(default=None, max_length=30)
 
@@ -178,15 +178,27 @@ def greeting_text() -> str:
             "Para atenderte mejor guardo tu nombre y lo que hablemos, según nuestra política de datos. "
             "Si estás de acuerdo, ¿cómo te llamas? Si no, dime que no y seguimos sin guardar nada.")
 
-def blocked_response(conversation: dict | None, question: str) -> dict:
-    """Offensive language: Osky closes the conversation and answers nothing else in it."""
-    answer = closing_message(settings.company_name)
+def forbidden(conversation: dict | None, text: str) -> str | None:
+    """Why this turn can't be answered: "cerrada" (Osky already closed the conversation),
+    a forbidden category (insults, sexual content, minors, drugs...) or None."""
+    if conversations.is_closed(conversation):
+        return "cerrada"
+    return classify(text)
+
+def blocked_response(conversation: dict | None, question: str, category: str = "lenguaje") -> dict:
+    """Forbidden language or topic: Osky closes the conversation and answers nothing else in it."""
+    if category == "cerrada":
+        answer = f"Esta conversación ya terminó. Si necesitas algo de {settings.company_name}, empieza una nueva."
+    else:
+        answer = closing_message(settings.company_name, category)
     if conversation and not conversations.is_closed(conversation):
         if conversations.has_consent(conversation):
-            conversations.log_message(engine, conversation["id"], "visitante", redact(question), intent="bloqueado")
+            # The forbidden text itself is not stored (it may be sensitive personal data).
+            conversations.log_message(engine, conversation["id"], "visitante", f"[mensaje bloqueado: {category}]",
+                                      intent="bloqueado")
             conversations.log_message(engine, conversation["id"], "osky", answer, intent="bloqueado")
-        conversations.close(engine, conversation["id"], "lenguaje_inapropiado")
-    log_query(engine, None, None, answer, "blocked")  # the offensive text itself is not kept here
+        conversations.close(engine, conversation["id"], end_reason(category))
+    log_query(engine, None, None, answer, "blocked")
     return {"status": "blocked", "source": None, "intent": "blocked", "answer": answer, "query": None,
             "result": None, "sources": [], "actions": [], "ended": True, "name": None}
 
@@ -196,8 +208,9 @@ def conversation_name(conversation_id: str, body: NameRequest, request: Request)
     conversation = conversations.get(engine, conversation_id)
     if not conversation:
         raise HTTPException(status_code=404, detail="Conversación no encontrada")
-    if conversations.is_closed(conversation) or is_offensive(body.text):
-        blocked = blocked_response(conversation, body.text)
+    category = forbidden(conversation, body.text)
+    if category:
+        blocked = blocked_response(conversation, body.text, category)
         return {"status": "blocked", "name": None, "reply": blocked["answer"], "ended": True}
     result = conversations.name_reply(body.text, body.attempt)
     if result["status"] == "ok":
@@ -259,11 +272,14 @@ def admin_export():
 @router.post("/ask", dependencies=[Depends(rate_limit)])
 def ask(request: AskRequest):
     conversation = conversations.get(engine, request.conversation_id)
-    # 0. Insults, obscenities or sexual content end the conversation right away.
-    if conversations.is_closed(conversation) or is_offensive(request.question):
-        return blocked_response(conversation, request.question)
+    # 0. Insults or forbidden topics (sexual content, minors, drugs...) end the conversation.
+    category = forbidden(conversation, request.question)
+    if category:
+        return blocked_response(conversation, request.question, category)
     consent, name, history = _prepare(request, conversation)
     response = _answer(request, name, history)
+    if response.pop("_forbidden", False):  # the language model saw a forbidden topic
+        return blocked_response(conversation, request.question, "modelo")
     natural = response.pop("_natural", False)
     use_name = _use_name(conversation, name)
     _personalize(response, request, name if use_name else None, natural)
@@ -288,8 +304,9 @@ def _meta(response: dict, name: str | None) -> str:
 
 def _stream_events(request: AskRequest):
     conversation = conversations.get(engine, request.conversation_id)
-    if conversations.is_closed(conversation) or is_offensive(request.question):
-        response = blocked_response(conversation, request.question)
+    category = forbidden(conversation, request.question)
+    if category:
+        response = blocked_response(conversation, request.question, category)
         yield _meta(response, None)
         yield _event("sentence", text=response["answer"])
         yield _event("done", **response)
@@ -303,6 +320,18 @@ def _stream_events(request: AskRequest):
     said: list[str] = []
     if llm:
         for sentence in stream_natural_answer(request.question, llm["context"], request.style, llm["turns"]):
+            if sentence == FORBIDDEN:
+                blocked = blocked_response(conversation, request.question, "modelo")
+                yield _meta(blocked, None)
+                yield _event("sentence", text=blocked["answer"])
+                yield _event("done", **blocked)
+                return
+            if sentence == OFF_TOPIC:
+                if said:
+                    break  # part of an answer was already said: stop there
+                response, llm = off_topic_response(request), None  # (already logged)
+                yield _meta(response, name)  # replaces the sources/buttons of the first "meta"
+                break
             if not said and use_name:
                 sentence = conversations.add_name(sentence, name)
             said.append(sentence)
@@ -319,6 +348,14 @@ def _stream_events(request: AskRequest):
     _log_turn(conversation, consent, request.question, response)
     response["name"] = name
     yield _event("done", **response)
+
+def off_topic_response(request: AskRequest) -> dict:
+    """The question is not about the company: Osky doesn't answer it."""
+    answer = (f"Solo puedo ayudarte con temas de {settings.company_name}, como nuestras soluciones, "
+              "la empresa o cómo contactarnos. ¿Te cuento de alguna de nuestras soluciones?")
+    log_query(engine, request.question, None, answer, "off_topic")
+    return {"status": "not_found", "source": None, "intent": "off_topic", "answer": answer, "more": "",
+            "query": None, "result": None, "sources": [], "actions": []}
 
 def _prepare(request: AskRequest, conversation: dict | None) -> tuple[bool, str | None, list[str]]:
     # Phones, e-mails and ID numbers are not needed to answer: never stored nor sent to the LLM.
@@ -443,6 +480,10 @@ def _answer(request: AskRequest, name: str | None, history: list[str], defer_llm
         # Natural wording from the same sources (Groq); literal extract as fallback.
         turns = [{"q": redact(t.q), "a": t.a} for t in request.history]
         natural = None if defer_llm else natural_answer(question, found["context"], request.style, turns)
+        if natural == FORBIDDEN:
+            return {"_forbidden": True}
+        if natural == OFF_TOPIC:
+            return off_topic_response(request)
         answer, more = (natural, "") if natural else (found["answer"], "")
         if not natural and request.style == "voice":
             answer, more = split_for_voice(answer)

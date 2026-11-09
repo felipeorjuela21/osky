@@ -12,12 +12,14 @@ import {
   setTtsRate,
   setTtsVoice,
 } from "../voice";
+import { bargeInEnabled, canBargeIn, setBargeIn } from "../voiceInput";
 
 const SAMPLE = "¡Hola! Soy Osky, el asistente virtual de CeluWeb. ¿En qué te puedo ayudar hoy?";
 const LOCALE_ORDER = ["es-CO", "es-MX", "es-US", "es-ES"];
 
 export function VoiceSettings() {
   const [open, setOpen] = useState(false);
+  const [bargeIn, setBargeInState] = useState(bargeInEnabled);
   const [voices, setVoices] = useState<VoiceInfo[]>([]);
   const [serverDefault, setServerDefault] = useState("");
   const [voice, setVoice] = useState(getTtsVoice);
@@ -172,6 +174,22 @@ export function VoiceSettings() {
                 ))}
             </select>
           </label>
+          {canBargeIn && (
+            <label className="voice-settings__check">
+              <input
+                type="checkbox"
+                checked={bargeIn}
+                onChange={(e) => {
+                  setBargeIn(e.target.checked);
+                  setBargeInState(e.target.checked);
+                }}
+              />
+              <span>
+                Interrumpir a Osky hablando
+                <small>Recomendado solo con audífonos: con parlantes el computador baja el volumen de Osky.</small>
+              </span>
+            </label>
+          )}
           <div className="voice-settings__mic">
             <button className="chip" onClick={() => void testMic()} disabled={micTesting}>
               {micTesting ? "Escuchando…" : "🎤 Probar micrófono"}

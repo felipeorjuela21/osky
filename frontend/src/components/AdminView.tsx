@@ -13,6 +13,16 @@ import "./admin.css";
 /* Private log of conversations (open with ?admin=1). Needs ADMIN_TOKEN on the server. */
 
 const TOKEN_KEY = "osky.adminToken";
+
+/** Why Osky closed a conversation ("lenguaje_inapropiado", "tema_prohibido:sexual"...). */
+const TOPICS: Record<string, string> = {
+  sexual: "contenido sexual", menores: "menores de edad", drogas: "drogas", violencia: "violencia",
+  odio: "odio", delitos: "delitos", autolesion: "autolesión", modelo: "tema prohibido", bloqueado: "palabra bloqueada",
+};
+const endedLabel = (reason: string) =>
+  reason === "lenguaje_inapropiado"
+    ? "Cerrada por lenguaje"
+    : `Cerrada por tema: ${TOPICS[reason.split(":")[1]] ?? reason}`;
 const dateFmt = new Intl.DateTimeFormat("es-CO", { timeZone: "America/Bogota", dateStyle: "medium", timeStyle: "short" });
 const timeFmt = new Intl.DateTimeFormat("es-CO", { timeZone: "America/Bogota", timeStyle: "medium" });
 
@@ -148,7 +158,7 @@ export function AdminView() {
               <span className="admin__meta">
                 {dateFmt.format(new Date(c.started_at))} · {c.channel === "persona" ? "🧑‍🚀 Persona" : "💬 Chat"} · {c.questions}{" "}
                 {c.questions === 1 ? "pregunta" : "preguntas"}
-                {c.ended_reason === "lenguaje_inapropiado" && " · ⛔ Cerrada por lenguaje"}
+                {c.ended_reason && ` · ⛔ ${endedLabel(c.ended_reason)}`}
               </span>
               {c.last_question && <span className="admin__last">“{c.last_question}”</span>}
             </button>
@@ -172,7 +182,7 @@ export function AdminView() {
             <p className="admin__meta">
               {dateFmt.format(new Date(selected.started_at))} · {selected.channel === "persona" ? "Persona" : "Chat"}
               {selected.consent_at && ` · Autorizó datos: ${dateFmt.format(new Date(selected.consent_at))} (${selected.policy_version ?? "política"})`}
-              {selected.ended_reason === "lenguaje_inapropiado" && " · ⛔ Cerrada por lenguaje inapropiado"}
+              {selected.ended_reason && ` · ⛔ ${endedLabel(selected.ended_reason)}`}
             </p>
             <button className="admin__delete" onClick={() => void remove(selected.id, selected.name)}>
               Borrar conversación (solicitud del titular)

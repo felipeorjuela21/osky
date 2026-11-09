@@ -1,5 +1,5 @@
 import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
-import { Action, AgentInfo, Source, Turn, ask, sendName, startConversation, topicOf } from "../api";
+import { Action, AgentInfo, MAX_QUESTION, Source, Turn, ask, sendName, startConversation, topicOf } from "../api";
 import { ActionButtons, SourceLabel } from "./Actions";
 import { useSpeech } from "../hooks/useSpeech";
 import { AgentState, OskiAvatar } from "./OskiAvatar";
@@ -232,7 +232,7 @@ export function ChatView({ agent }: { agent: AgentInfo | null }) {
             value={input}
             onChange={(e) => setInput(e.target.value)}
             placeholder={ended ? "Conversación terminada" : waitingName ? "Tu nombre, o «no»…" : "Escribe tu pregunta sobre CeluWeb…"}
-            maxLength={500}
+            maxLength={MAX_QUESTION}
             disabled={ended}
             aria-label={waitingName ? "Tu nombre" : "Pregunta"}
           />

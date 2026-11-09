@@ -4,7 +4,7 @@ import { Playback, sharedAudioContext, speakWithLevels, unlockAudio } from "../a
 import { ListenHandle, canListen } from "../speech";
 import { ListenPhase, canRecord, listenTurn, serverSttUsable } from "../stt";
 import { Speech, fetchSpeech, wordOffsets } from "../voice";
-import { VoiceInput, canBargeIn } from "../voiceInput";
+import { VoiceInput, bargeInEnabled } from "../voiceInput";
 import { ActionButtons, SourceLabel } from "./Actions";
 import { PRIVACY_URL, looksLikeQuestion } from "./ChatView";
 import { OskiRig, RigGesture, RigMood } from "./OskiRig";
@@ -480,9 +480,10 @@ export function PersonaView({ agent }: { agent: AgentInfo | null }) {
               }
               setSource(meta.sources[0] ?? null);
               setActions(meta.actions ?? []);
-              if (meta.intent === "not_found") playGesture("shrug", 1300);
+              const unsure = meta.intent === "not_found" || meta.intent === "off_topic";
+              if (unsure) playGesture("shrug", 1300);
               else if (["greeting", "goodbye", "thanks", "sales"].includes(meta.intent)) playGesture("wave", 1800);
-              voice.setFeeling(meta.intent === "not_found" ? "unsure" : meta.intent === "answer" ? "neutral" : "happy");
+              voice.setFeeling(unsure ? "unsure" : meta.intent === "answer" ? "neutral" : "happy");
             },
             onSentence: (sentence) => voice.add(sentence),
           },
@@ -656,7 +657,7 @@ export function PersonaView({ agent }: { agent: AgentInfo | null }) {
               )}{" "}
               {state === "listening"
                 ? LISTEN_STATUS[phase]
-                : state === "speaking" && vadReady && canBargeIn
+                : state === "speaking" && vadReady && bargeInEnabled()
                   ? SPEAKING_BARGE_IN
                   : STATUS[state]}
             </span>
