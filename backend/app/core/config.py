@@ -45,7 +45,9 @@ class Settings(BaseSettings):
     rate_limit_per_minute: int = 30  # per visitor IP, for ask
     media_rate_limit_per_minute: int = 90  # per visitor IP, for tts/stt (a spoken turn makes several calls)
     global_rate_limit_per_minute: int = 300  # all visitors together, protects the free Groq quota
-    trusted_proxy_hops: int = 1  # proxies in front of the app: the visitor IP is that far from the END of X-Forwarded-For
+    # Render puts the visitor IP and then 2 proxies in X-Forwarded-For (measured Nov 2026: 3 entries),
+    # so the visitor is the 3rd from the END. Anything a client forges goes before it.
+    trusted_proxy_hops: int = 3
     cors_origins: str = "http://localhost:5174,http://127.0.0.1:5174,https://localhost:5175"
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
