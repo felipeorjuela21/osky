@@ -116,6 +116,22 @@
 .persona__type input:focus { outline: none; }
 .persona__end { background: transparent; color: var(--danger); border: 1px solid rgba(255, 107, 107, 0.5); border-radius: 999px; padding: 8px 16px; font-weight: 700; }
 .persona__end:hover { background: rgba(255, 107, 107, 0.1); }
+/* Mute: big and obvious, red when the microphone is off. */
+.persona__mute {
+  display: flex; align-items: center; gap: 6px; flex: none; margin-left: -10px;
+  background: rgba(255, 255, 255, 0.08); color: var(--text); border: 1px solid #3a4a6e;
+  border-radius: 999px; padding: 8px 14px; font-weight: 700; font-size: 14px; cursor: pointer;
+}
+.persona__mute:hover { background: rgba(255, 255, 255, 0.14); }
+.persona__mute--on { background: var(--danger); border-color: var(--danger); color: #fff; animation: mute-pulse 2s infinite; }
+.persona__mute--on:hover { background: var(--danger); filter: brightness(1.1); }
+.persona__status--muted i { background: var(--danger); }
+@keyframes mute-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(255, 107, 107, 0.5); }
+  50% { box-shadow: 0 0 0 6px rgba(255, 107, 107, 0); }
+}
+@media (max-width: 640px) { .persona__mute { margin-left: -6px; padding: 8px 12px; } }
+@media (prefers-reduced-motion: reduce) { .persona__mute--on { animation: none; } }
 
 @media (max-width: 640px) {
   .persona__status { display: none; }

@@ -67,6 +67,8 @@ type Callbacks = {
 export class VoiceInput {
   private mode: InputMode = "off";
   private running = false;
+  private wanted = false;
+  private queue: Promise<void> = Promise.resolve();
   private segment = { active: false, accepted: false, bargedIn: false };
   private pending: Float32Array | null = null;
   private waiter: ((audio: Float32Array | null) => void) | null = null;
@@ -188,17 +190,31 @@ export class VoiceInput {
 
   // ---------- detector events ----------
 
-  private async run(on: boolean) {
-    if (on === this.running) return;
-    this.running = on;
-    if (on) await this.vad.start();
-    else await this.vad.pause();
+  /** Opens or closes the microphone. Calls are queued: muting while the mic is still
+      opening must end with it closed, not open. */
+  private run(on: boolean) {
+    this.wanted = on;
+    return this.enqueue(async () => {
+      const target = this.wanted;
+      if (target === this.running) return;
+      this.running = target;
+      if (DEBUG) console.debug("mic", target ? "abierto" : "cerrado");
+      if (target) await this.vad.start();
+      else await this.vad.pause();
+    });
   }
 
   /** Ends the current utterance now (pausing submits it), then keeps listening. */
-  private async endSegment() {
-    await this.vad.pause();
-    if (this.running) await this.vad.start();
+  private endSegment() {
+    return this.enqueue(async () => {
+      await this.vad.pause();
+      if (this.running) await this.vad.start();
+    });
+  }
+
+  private enqueue(step: () => Promise<void>) {
+    this.queue = this.queue.then(step).catch((e) => console.warn("VAD", e));
+    return this.queue;
   }
 
   private speechStarted() {

@@ -90,6 +90,11 @@ export function PersonaView({ agent }: { agent: AgentInfo | null }) {
   const look = useRef({ x: 0, y: 0, tx: 0, ty: 0, lastPointer: 0 });
   const stateRef = useRef<State>("idle");
   stateRef.current = state;
+  // The visitor muted the microphone: nothing is heard (noise isn't taken as a question)
+  // until they unmute; the turn waits instead of counting as silence.
+  const [muted, setMuted] = useState(false);
+  const mutedRef = useRef(false);
+  const resumeListening = useRef<(() => void) | null>(null);
 
   const stars = useMemo(() => [starLayer(260, 1), starLayer(90, 2), starLayer(35, 3)], []);
 
@@ -228,7 +233,7 @@ export function PersonaView({ agent }: { agent: AgentInfo | null }) {
           setMood(mood);
           setSpokenUntil(-1);
           setState("speaking");
-          void input.current?.setMode("speaking");
+          if (!mutedRef.current) void input.current?.setMode("speaking");
         }
         setOskiText(full);
         const offsets = audio ? wordOffsets(item.text, audio.words) : [];
@@ -287,27 +292,52 @@ export function PersonaView({ agent }: { agent: AgentInfo | null }) {
         listenHandle.current?.abort();
         finish(text);
       };
-      if ((!canRecord && !canListen) || micBlocked.current || session.current !== id) return; // wait for typed text
       const onError = (message: string, blocked?: boolean) => {
         if (blocked) micBlocked.current = true;
         setError(message);
       };
-      const vad = input.current && serverSttUsable() ? input.current : null;
-      if (vad) void vad.setMode("listening");
-      const handle = vad
-        ? vad.listen({ onPhase: setPhase, onError })
-        : listenTurn({
-            onLevel: (level) => root.current?.style.setProperty("--mic", level.toFixed(2)),
-            onPhase: setPhase,
-            onInterim: setUserText,
-            onError,
-          });
-      listenHandle.current = handle;
-      void handle.result.then((text) => {
-        if (text) setError(null);
-        finish(text);
-      });
+      // Starts listening now, or later when the visitor unmutes.
+      const listenNow = () => {
+        if (settled || mutedRef.current || session.current !== id) return;
+        if ((!canRecord && !canListen) || micBlocked.current) return; // wait for typed text
+        setPhase("waiting");
+        const vad = input.current && serverSttUsable() ? input.current : null;
+        if (vad) void vad.setMode("listening");
+        const handle = vad
+          ? vad.listen({ onPhase: setPhase, onError })
+          : listenTurn({
+              onLevel: (level) => root.current?.style.setProperty("--mic", level.toFixed(2)),
+              onPhase: setPhase,
+              onInterim: setUserText,
+              onError,
+            });
+        listenHandle.current = handle;
+        void handle.result.then((text) => {
+          if (listenHandle.current !== handle) return; // muted meanwhile: that audio is discarded
+          listenHandle.current = null;
+          if (text) setError(null);
+          finish(text);
+        });
+      };
+      resumeListening.current = listenNow;
+      listenNow();
     });
+  }, []);
+
+  const toggleMute = useCallback(() => {
+    const next = !mutedRef.current;
+    mutedRef.current = next;
+    setMuted(next);
+    if (next) {
+      // Drops whatever was being recorded and closes the microphone.
+      const handle = listenHandle.current;
+      listenHandle.current = null;
+      handle?.abort();
+      root.current?.style.setProperty("--mic", "0");
+      void input.current?.setMode("off");
+    } else if (stateRef.current === "listening") {
+      resumeListening.current?.();
+    }
   }, []);
 
   const end = useCallback(() => {
@@ -315,6 +345,7 @@ export function PersonaView({ agent }: { agent: AgentInfo | null }) {
     playback.current?.cancel();
     listenHandle.current?.abort();
     typedTurn.current = null;
+    resumeListening.current = null;
     pendingMore.current = "";
     voiceLevel.current = 0;
     void input.current?.setMode("off"); // closes the microphone
@@ -361,7 +392,7 @@ export function PersonaView({ agent }: { agent: AgentInfo | null }) {
         if (heard) {
           silent.count = 0;
           setUserText(heard);
-          void input.current?.setMode("thinking");
+          if (!mutedRef.current) void input.current?.setMode("thinking");
           return heard;
         }
         if (micBlocked.current) {
@@ -386,6 +417,8 @@ export function PersonaView({ agent }: { agent: AgentInfo | null }) {
     const id = ++session.current;
     const alive = () => session.current === id;
     setActive(true);
+    mutedRef.current = false;
+    setMuted(false);
     setError(null);
     setUserText("");
     setVisitorName(null);
@@ -535,13 +568,17 @@ export function PersonaView({ agent }: { agent: AgentInfo | null }) {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.code !== "Space" || !active || (e.target as HTMLElement).tagName === "INPUT") return;
-      e.preventDefault();
-      interrupt();
+      if (!active || (e.target as HTMLElement).tagName === "INPUT") return;
+      if (e.code === "Space") {
+        e.preventDefault();
+        interrupt();
+      } else if (e.code === "KeyM" && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        toggleMute();
+      }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [active, interrupt]);
+  }, [active, interrupt, toggleMute]);
 
   const onType = (e: FormEvent) => {
     e.preventDefault();
@@ -643,8 +680,26 @@ export function PersonaView({ agent }: { agent: AgentInfo | null }) {
           </>
         ) : (
           <div className="persona__bar">
-            <span className={`persona__status persona__status--${state}`}>
-              {state === "listening" ? (
+            <button
+              type="button"
+              className={`persona__mute ${muted ? "persona__mute--on" : ""}`}
+              onClick={toggleMute}
+              aria-pressed={muted}
+              title={muted ? "Activar el micrófono (tecla M)" : "Silenciar el micrófono (tecla M)"}
+            >
+              <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden>
+                <path
+                  fill="currentColor"
+                  d="M12 14a3 3 0 0 0 3-3V5a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3Zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-3.08A7 7 0 0 0 19 11h-2Z"
+                />
+                {muted && <path d="M4 3 21 20" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" />}
+              </svg>
+              <span>{muted ? "Activar micrófono" : "Silenciar"}</span>
+            </button>
+            <span className={`persona__status persona__status--${muted ? "muted" : state}`}>
+              {muted ? (
+                <i />
+              ) : state === "listening" ? (
                 <span className="mic-meter" aria-hidden>
                   <i />
                   <i />
@@ -655,7 +710,9 @@ export function PersonaView({ agent }: { agent: AgentInfo | null }) {
               ) : (
                 <i />
               )}{" "}
-              {state === "listening"
+              {muted
+                ? "Micrófono silenciado · no te escucho"
+                : state === "listening"
                 ? LISTEN_STATUS[phase]
                 : state === "speaking" && vadReady && bargeInEnabled()
                   ? SPEAKING_BARGE_IN
