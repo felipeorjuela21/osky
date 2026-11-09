@@ -32,6 +32,9 @@ const MORE_PROMPTS = ["¿Te cuento más?", "¿Quieres más detalles?", "¿Te sig
 const YES = /^(si|sip|claro|dale|ok|okey|bueno|por favor|cuentame( mas)?|mas|quiero saber mas|de una|obvio|sigue|continua)( (si|claro|dale|por favor|gracias|cuentame( mas)?|osky|oski))*$/;
 const NO = /^(no|nop|asi esta bien|no gracias|listo gracias|esta bien)( (gracias|osky|oski))*$/;
 const MAX_SILENT_TURNS = 2;
+/* Said right away when the answer takes a moment (transcribing + model + voice add up to
+   ~3 s): the audio is generated once during the greeting, so it plays instantly. */
+const FILLERS = ["A ver.", "Déjame ver.", "Mmm, un segundo.", "Ok, déjame revisar."];
 
 /** First sentence alone, the rest together: Osky starts talking as soon as the
     first sentence is synthesised while the rest is prepared in the background. */
@@ -113,6 +116,8 @@ export function PersonaView({ agent }: { agent: AgentInfo | null }) {
 
   // Warm up the greeting's neural voice so the first words come out instantly.
   const greetingSpeech = useRef<Promise<Speech | null> | null>(null);
+  const readyFillers = useRef(new Map<string, Speech>()); // only fillers whose audio already arrived
+  const lastFiller = useRef("");
   useEffect(() => {
     greetingSpeech.current = fetchSpeech(greeting);
   }, [greeting]);
@@ -440,6 +445,9 @@ export function PersonaView({ agent }: { agent: AgentInfo | null }) {
     // and the voice activity detector loads meanwhile.
     loadVoiceInput();
     const conversation = startConversation("persona").catch(() => null);
+    for (const f of FILLERS) {
+      if (!readyFillers.current.has(f)) void fetchSpeech(f).then((s) => s && readyFillers.current.set(f, s));
+    }
     playGesture("wave", 1800);
     setAskingConsent(true); // the policy link stays on screen while Osky asks
     await say(greeting, id, "happy", greetingSpeech.current);
@@ -499,6 +507,18 @@ export function PersonaView({ agent }: { agent: AgentInfo | null }) {
       // The answer arrives sentence by sentence and Osky starts with the first one.
       // The server already words it warmly and with the visitor's name ("Claro, Ana. ...").
       const voice = speaker(id);
+      let answered = false;
+      // A real question: a short "A ver." right away, while the answer and its voice are
+      // prepared (~2-3 s). Not for "gracias", "hola"... which are answered instantly.
+      const filler = question.split(/\s+/).length > 3 ? pick(FILLERS.filter((f) => f !== lastFiller.current)) : "";
+      const fillerAudio = filler ? readyFillers.current.get(filler) : undefined;
+      if (filler && fillerAudio) {
+        lastFiller.current = filler;
+        voice.add(filler, Promise.resolve(fillerAudio));
+      }
+      const markAnswered = () => {
+        answered = true;
+      };
       let response: AskResponse;
       try {
         response = await askStream(
@@ -518,17 +538,22 @@ export function PersonaView({ agent }: { agent: AgentInfo | null }) {
               else if (["greeting", "goodbye", "thanks", "sales"].includes(meta.intent)) playGesture("wave", 1800);
               voice.setFeeling(unsure ? "unsure" : meta.intent === "answer" ? "neutral" : "happy");
             },
-            onSentence: (sentence) => voice.add(sentence),
+            onSentence: (sentence) => {
+              markAnswered();
+              voice.add(sentence);
+            },
           },
           topic.current,
           conversationId.current,
           history.current,
         );
       } catch {
+        const partial = answered;
+        markAnswered();
         voice.close();
         await voice.done;
         if (!alive()) return;
-        if (voice.text()) continue; // the answer was cut, but part of it was said
+        if (partial) continue; // the answer was cut, but part of it was said
         await say("Uy, no pude conectarme con el servidor. Inténtalo de nuevo en un momento.", id, "unsure");
         if (alive()) end();
         return;
@@ -685,6 +710,7 @@ export function PersonaView({ agent }: { agent: AgentInfo | null }) {
               className={`persona__mute ${muted ? "persona__mute--on" : ""}`}
               onClick={toggleMute}
               aria-pressed={muted}
+              aria-label={muted ? "Activar micrófono" : "Silenciar micrófono"}
               title={muted ? "Activar el micrófono (tecla M)" : "Silenciar el micrófono (tecla M)"}
             >
               <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden>
@@ -694,7 +720,8 @@ export function PersonaView({ agent }: { agent: AgentInfo | null }) {
                 />
                 {muted && <path d="M4 3 21 20" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" />}
               </svg>
-              <span>{muted ? "Activar micrófono" : "Silenciar"}</span>
+              <span className="persona__mute-long">{muted ? "Activar micrófono" : "Silenciar"}</span>
+              <span className="persona__mute-short">Activar</span>
             </button>
             <span className={`persona__status persona__status--${muted ? "muted" : state}`}>
               {muted ? (
