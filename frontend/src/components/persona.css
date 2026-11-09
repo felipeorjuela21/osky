@@ -111,9 +111,10 @@
 .persona__status--speaking i { background: var(--accent); }
 .persona__type { flex: 1; min-width: 80px; }
 .persona__type input {
-  width: 100%; background: transparent; border: 0; color: var(--text); font: inherit; font-size: 14px; padding: 8px;
+  width: 100%; background: transparent; border: 0; color: var(--text); font: inherit; font-size: 16px; padding: 8px; min-height: 44px;
 }
 .persona__type input:focus { outline: none; }
+.persona__bar:focus-within { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent); }
 .persona__end { background: transparent; color: var(--danger); border: 1px solid rgba(255, 107, 107, 0.5); border-radius: 999px; padding: 8px 16px; font-weight: 700; }
 .persona__end:hover { background: rgba(255, 107, 107, 0.1); }
 /* Mute: big and obvious, red when the microphone is off. */

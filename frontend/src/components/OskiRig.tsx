@@ -4,7 +4,7 @@ export type RigState = "idle" | "listening" | "thinking" | "speaking";
 export type RigMood = "neutral" | "happy" | "curious" | "unsure";
 export type RigGesture = "" | "wave" | "nod" | "shrug";
 
-const PART = (name: string) => `/oski-rig/${name}.png`;
+const PART = (name: string) => `/oski-rig/${name}.webp`;
 
 /* The astronaut cut into layers (frontend/scripts/build_rig.py) and animated
    from its joints. Reads --talk, --mic, --look-x and --look-y from an ancestor. */

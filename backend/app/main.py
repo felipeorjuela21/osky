@@ -2,7 +2,7 @@ import logging
 import threading
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import func, select
 
@@ -72,10 +72,12 @@ app.add_middleware(
 app.include_router(router)
 
 @app.get("/health")
-def health():
+def health(request: Request):
     from backend.app.services import llm
     from backend.app.services.stt import is_ready
 
+    # No database query here: the cron pings /health every few minutes and a query would keep
+    # the free database (Neon) awake 24/7, using up its monthly compute allowance.
     return {
         "status": "ok",
         "service": "enterprise-voice-data-agent",
@@ -83,4 +85,7 @@ def health():
         "stt_ready": is_ready(),
         # Natural answers (Groq): model in use and last error, to diagnose without the server logs.
         "llm": {"provider": settings.effective_llm, **llm.status},
+        # How many addresses the proxies put in X-Forwarded-For (never the addresses themselves):
+        # with TRUSTED_PROXY_HOPS it tells whether the per-visitor limit sees the real visitor.
+        "proxy_entries": len([h for h in request.headers.get("x-forwarded-for", "").split(",") if h.strip()]),
     }

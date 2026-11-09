@@ -6,6 +6,7 @@ their source URL. If nothing relevant is found the agent says so.
 import json
 import math
 import re
+import time
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
@@ -249,14 +250,27 @@ def load_documents() -> list[Chunk]:
             chunks.append(Chunk(-(100000 + len(chunks)), title, "documento", "", part))
     return chunks
 
+INDEX_CHECK_SECONDS = 30  # how long the table/files signature is trusted before looking again
+
+def invalidate_index() -> None:
+    """Forces the next get_index() to re-check the database and files (after a refresh/ingest)."""
+    _cache["checked_at"] = None
+
 def get_index(engine: Engine) -> KnowledgeIndex:
+    now = time.monotonic()
+    index = _cache["index"]
+    if (index is not None and _cache.get("engine") is engine and _cache.get("checked_at") is not None
+            and now - _cache["checked_at"] < INDEX_CHECK_SECONDS):
+        return index
     facts_mtime = FACTS_PATH.stat().st_mtime if FACTS_PATH.exists() else 0
     with engine.connect() as conn:
         key = (*conn.execute(select(func.count(), func.max(knowledge_chunks.c.id))).one(), facts_mtime, _docs_signature())
-        if _cache["key"] != key:
+        if _cache["key"] != key or _cache.get("engine") is not engine:
             rows = conn.execute(select(knowledge_chunks)).all()
             chunks = [Chunk(r.id, r.title, r.kind, r.source_url, r.content) for r in rows]
-            _cache.update(key=key, index=KnowledgeIndex(chunks + load_facts() + load_documents()))
+            _cache.update(key=key, index=KnowledgeIndex(chunks + load_facts() + load_documents()), engine=engine)
+    # An empty table (knowledge still loading at startup) is checked again on the next call.
+    _cache["checked_at"] = now if key[0] else None
     return _cache["index"]
 
 def _is_short(line: str) -> bool:

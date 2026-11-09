@@ -65,11 +65,11 @@ export default function App() {
           <div className="topbar__actions">
             <VoiceSettings />
             <div className="modes" role="tablist" aria-label="Modo">
-              <button role="tab" aria-selected={mode === "chat"} className={mode === "chat" ? "modes__on" : ""} onClick={() => changeMode("chat")}>
+              <button role="tab" aria-label="Chat" aria-selected={mode === "chat"} className={mode === "chat" ? "modes__on" : ""} onClick={() => changeMode("chat")}>
                 <span aria-hidden>💬</span>
                 <span className="modes__label">Chat</span>
               </button>
-              <button role="tab" aria-selected={mode === "persona"} className={mode === "persona" ? "modes__on" : ""} onClick={() => changeMode("persona")}>
+              <button role="tab" aria-label="Persona" aria-selected={mode === "persona"} className={mode === "persona" ? "modes__on" : ""} onClick={() => changeMode("persona")}>
                 <span aria-hidden>🧑‍🚀</span>
                 <span className="modes__label">Persona</span>
               </button>

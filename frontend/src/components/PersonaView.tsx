@@ -1,5 +1,5 @@
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Action, AgentInfo, AskResponse, Source, Turn, askStream, logTurn, sendName, startConversation, topicOf } from "../api";
+import { Action, AgentInfo, AskResponse, MAX_QUESTION, Source, Turn, askStream, logTurn, sendName, startConversation, topicOf } from "../api";
 import { Playback, sharedAudioContext, speakWithLevels, unlockAudio } from "../audio";
 import { ListenHandle, canListen } from "../speech";
 import { ListenPhase, canRecord, listenTurn, serverSttUsable } from "../stt";
@@ -36,15 +36,42 @@ const MAX_SILENT_TURNS = 2;
    ~3 s): the audio is generated once during the greeting, so it plays instantly. */
 const FILLERS = ["A ver.", "Déjame ver.", "Mmm, un segundo.", "Ok, déjame revisar."];
 
-/** First sentence alone, the rest together: Osky starts talking as soon as the
-    first sentence is synthesised while the rest is prepared in the background. */
+/** The first spoken piece is short (~6-14 words) so its audio is ready fast (edge-tts time
+    grows with length); the rest goes together while the first piece plays. Never cuts a word
+    and never leaves a piece of 1-2 words. */
+const FIRST_MAX_WORDS = 14;
+const MIN_PIECE_WORDS = 3;
 function speechChunks(text: string): string[] {
-  if (text.length < 90) return [text];
-  const end = /[.!?](\s|$)/g;
-  end.lastIndex = 25;
-  const match = end.exec(text);
-  if (!match || match.index > text.length - 20) return [text];
-  return [text.slice(0, match.index + 1), text.slice(match.index + 1).trim()];
+  const words = text.trim().split(/\s+/);
+  if (words.length <= FIRST_MAX_WORDS) return [text];
+  const sentenceEnd = (w: string) => /[.!?;]["')»]*$/.test(w);
+  let cut = -1; // number of words in the first piece
+  let firstSentence = words.findIndex(sentenceEnd) + 1; // 0 when no sentence ends
+  if (firstSentence === 0) firstSentence = words.length;
+  if (firstSentence < MIN_PIECE_WORDS) {
+    // Opener like "Claro.": fold the next sentence in so the piece is not 1-2 words.
+    const next = words.findIndex((w, i) => i >= firstSentence && sentenceEnd(w)) + 1;
+    firstSentence = next > 0 ? next : words.length;
+  }
+  if (firstSentence <= FIRST_MAX_WORDS) {
+    cut = firstSentence;
+  } else {
+    // Long first sentence: break at a comma, ";" or before "y/pero/..." closest to 10 words.
+    let best = Infinity;
+    for (let i = 6; i <= Math.min(FIRST_MAX_WORDS, firstSentence - MIN_PIECE_WORDS); i++) {
+      const atPunct = /[,;:]["')»]*$/.test(words[i - 1]);
+      const beforeConj = /^(y|e|o|pero|aunque|porque|que|para|con|donde|cuando)$/i.test(words[i] ?? "");
+      if (!atPunct && !beforeConj) continue;
+      const score = Math.abs(i - 10) + (atPunct ? 0 : 1);
+      if (score < best) {
+        best = score;
+        cut = i;
+      }
+    }
+    if (cut === -1) cut = firstSentence; // no natural break: keep the sentence whole
+  }
+  if (words.length - cut < MIN_PIECE_WORDS) return [text];
+  return [words.slice(0, cut).join(" "), words.slice(cut).join(" ")];
 }
 
 const sleep = (ms: number) => new Promise((r) => window.setTimeout(r, ms));
@@ -625,7 +652,7 @@ export function PersonaView({ agent }: { agent: AgentInfo | null }) {
     <div ref={root} className={`persona persona--${state} ${active ? "persona--active" : ""}`}>
       <div className="space" aria-hidden>
         <div className="space__nebula" />
-        <img className="space__moon" src="/space/moon.png" alt="" draggable={false} />
+        <img className="space__moon" src="/space/moon.webp" alt="" width={600} height={600} loading="lazy" decoding="async" draggable={false} />
         {stars.map((style, i) => (
           <div key={i} className={`space__stars space__stars--${i + 1}`} style={style} />
         ))}
@@ -746,7 +773,7 @@ export function PersonaView({ agent }: { agent: AgentInfo | null }) {
                   : STATUS[state]}
             </span>
             <form className="persona__type" onSubmit={onType}>
-              <input value={typed} onChange={(e) => setTyped(e.target.value)} placeholder="…o escribe aquí" aria-label="Escribir a Osky" />
+              <input value={typed} onChange={(e) => setTyped(e.target.value)} maxLength={MAX_QUESTION} placeholder="…o escribe aquí" aria-label="Escribir a Osky" />
             </form>
             <button className="persona__end" onClick={end}>
               Terminar

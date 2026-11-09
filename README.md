@@ -118,8 +118,8 @@ misma red (algunas redes corporativas o de invitados aíslan los dispositivos y 
 
 ## Logo de Osky
 
-El avatar es el astronauta de celuweb.com (`frontend/public/oski.png`) y el logo CW está en `frontend/public/celuweb-logo.png`. Para cambiarlo, reemplaza esos archivos (PNG cuadrado con fondo transparente).
-Si falta `oski.png`, se muestra el marcador `frontend/public/oski.svg`.
+El avatar es el astronauta de celuweb.com (`frontend/public/oski-rig/`) y el logo CW está en `frontend/public/celuweb-logo.png`. Para cambiarlo, reemplaza esos archivos (PNG cuadrado con fondo transparente).
+El astronauta del modo voz usa las piezas WebP de `frontend/public/oski-rig/`.
 
 ### Astronauta articulado
 

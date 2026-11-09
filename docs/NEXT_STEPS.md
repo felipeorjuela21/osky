@@ -9,7 +9,7 @@
 - Frontend React + TS "Osky": micrófono (STT) y voz (TTS) del navegador, estados idle/listening/thinking/speaking, interrupción (barge-in).
 
 ## Pendiente
-1. **Logo de Osky** → `frontend/public/oski.png`.
+1. **Logo de Osky** → `frontend/public/oski-rig/` (piezas WebP).
 2. **Revisar inconsistencias del sitio**: el pie de página dice "Carrera 14 N 15 Edificio Icono" y mesa de ayuda +57 320 889 9518;
    la política de privacidad dice "Carrera 14 No. 35-18" y +57 320 671 8302. Osky repite lo que diga cada fuente.
 3. **Respuestas más naturales (opcional)**: usar un LLM solo para redactar a partir de los fragmentos recuperados,

@@ -1,4 +1,5 @@
 import json
+import logging
 import random
 import re
 from datetime import datetime
@@ -12,10 +13,10 @@ from pydantic import BaseModel, Field
 from backend.app.core.config import settings
 from backend.app.core.data_dictionary import DATA_DICTIONARY
 from backend.app.core.db import engine
-from backend.app.core.security import rate_limit, require_admin
+from backend.app.core.security import client_ip, rate_limit, rate_limit_light, rate_limit_media, require_admin
 from backend.app.services import conversations
 from backend.app.services.answer import build_answer
-from backend.app.services.knowledge import answer_from_knowledge, get_index, knowledge_stats, split_for_voice
+from backend.app.services.knowledge import answer_from_knowledge, get_index, invalidate_index, knowledge_stats, split_for_voice
 from backend.app.services.needs import recommend
 from backend.app.services.moderation import classify, closing_message, end_reason
 from backend.app.services.privacy import redact
@@ -35,6 +36,8 @@ from backend.app.services.query_engine import (
     recent_logs,
     sum_field,
 )
+
+logger = logging.getLogger("uvicorn.error")
 
 router = APIRouter(prefix="/api")
 
@@ -98,25 +101,30 @@ class TTSRequest(BaseModel):
     voice: str | None = Field(default=None, pattern=r"^[a-z]{2}-[A-Z]{2}-[A-Za-z]+Neural$")
     rate: str | None = Field(default=None, pattern=r"^[+-]\d{1,2}%$")
 
-@router.post("/tts", dependencies=[Depends(rate_limit)])
+@router.post("/tts", dependencies=[Depends(rate_limit_media)])
 async def tts(request: TTSRequest):
     try:
         return await synthesize(request.text, await allowed_voice(request.voice), request.rate)
     except TTSUnavailable as exc:
-        raise HTTPException(status_code=503, detail=f"TTS no disponible: {exc}")
+        logger.warning("TTS unavailable: %s", exc)
+        raise HTTPException(status_code=503, detail="La voz no está disponible en este momento.")
 
 @router.get("/tts/voices")
 async def tts_voices():
     try:
         return {"default": settings.tts_voice, "voices": await spanish_voices()}
     except TTSUnavailable as exc:
-        raise HTTPException(status_code=503, detail=f"TTS no disponible: {exc}")
+        logger.warning("TTS voices unavailable: %s", exc)
+        raise HTTPException(status_code=503, detail="La voz no está disponible en este momento.")
 
-MAX_AUDIO_BYTES = 8 * 1024 * 1024
+MAX_AUDIO_BYTES = 3 * 1024 * 1024
 
-@router.post("/stt", dependencies=[Depends(rate_limit)])
+@router.post("/stt", dependencies=[Depends(rate_limit_media)])
 async def stt(request: Request):
     """Body: the recorded audio (webm/ogg/wav). Returns {"text": ..., "duration": ...}."""
+    declared = request.headers.get("content-length", "")
+    if declared.isdigit() and int(declared) > MAX_AUDIO_BYTES:
+        raise HTTPException(status_code=413, detail="Audio demasiado largo")
     audio = await request.body()
     if not audio:
         raise HTTPException(status_code=400, detail="Audio vacío")
@@ -126,7 +134,8 @@ async def stt(request: Request):
         content_type = request.headers.get("content-type", "audio/webm")
         return await run_in_threadpool(transcribe, audio, content_type)
     except STTUnavailable as exc:
-        raise HTTPException(status_code=503, detail=f"Reconocimiento de voz no disponible: {exc}")
+        logger.warning("STT unavailable: %s", exc)
+        raise HTTPException(status_code=503, detail="No pude entender el audio en este momento. Escribe tu pregunta, por favor.")
 
 @router.get("/knowledge")
 def knowledge():
@@ -140,6 +149,7 @@ def knowledge_refresh():
         chunks = ingest(engine)
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"No se pudo leer {settings.website_url}: {exc}")
+    invalidate_index()
     return {"status": "ok", "chunks": chunks}
 
 @router.get("/datasets")
@@ -166,7 +176,7 @@ def structured_query(ast: QueryAST):
     log_query(engine, None, ast, answer, "ok")
     return {"source": "database", "query": ast.model_dump(), "result": result, "answer": answer}
 
-@router.post("/conversations", dependencies=[Depends(rate_limit)])
+@router.post("/conversations", dependencies=[Depends(rate_limit_light)])
 def start_conversation(body: StartConversation, request: Request):
     """Starts a chat: Osky greets and asks the visitor's name first."""
     conversation_id = conversations.start(engine, body.channel)
@@ -194,15 +204,16 @@ def blocked_response(conversation: dict | None, question: str, category: str = "
     if conversation and not conversations.is_closed(conversation):
         if conversations.has_consent(conversation):
             # The forbidden text itself is not stored (it may be sensitive personal data).
-            conversations.log_message(engine, conversation["id"], "visitante", f"[mensaje bloqueado: {category}]",
-                                      intent="bloqueado")
-            conversations.log_message(engine, conversation["id"], "osky", answer, intent="bloqueado")
+            conversations.log_exchange(engine, conversation["id"], [
+                {"role": "visitante", "text": f"[mensaje bloqueado: {category}]", "intent": "bloqueado"},
+                {"role": "osky", "text": answer, "intent": "bloqueado"},
+            ])
         conversations.close(engine, conversation["id"], end_reason(category))
     log_query(engine, None, None, answer, "blocked")
     return {"status": "blocked", "source": None, "intent": "blocked", "answer": answer, "query": None,
             "result": None, "sources": [], "actions": [], "ended": True, "name": None}
 
-@router.post("/conversations/{conversation_id}/name", dependencies=[Depends(rate_limit)])
+@router.post("/conversations/{conversation_id}/name", dependencies=[Depends(rate_limit_light)])
 def conversation_name(conversation_id: str, body: NameRequest, request: Request):
     """Reply to the data notice + name question. Giving the name = authorising the data use."""
     conversation = conversations.get(engine, conversation_id)
@@ -214,25 +225,29 @@ def conversation_name(conversation_id: str, body: NameRequest, request: Request)
         return {"status": "blocked", "name": None, "reply": blocked["answer"], "ended": True}
     result = conversations.name_reply(body.text, body.attempt)
     if result["status"] == "ok":
-        conversations.accept(engine, conversation_id, result["name"], request.headers.get("user-agent", ""))
-        conversations.log_message(engine, conversation_id, "visitante", body.text, intent="nombre")
-        conversations.log_message(engine, conversation_id, "osky", result["reply"], intent="nombre")
+        conversations.accept(engine, conversation_id, result["name"])
+        conversations.log_exchange(engine, conversation_id, [
+            {"role": "visitante", "text": redact(body.text), "intent": "nombre"},
+            {"role": "osky", "text": result["reply"], "intent": "nombre"},
+        ])
     elif result["status"] in ("declined", "skip"):
         conversations.decline(engine, conversation_id)
     return result
 
-@router.post("/conversations/{conversation_id}/log", dependencies=[Depends(rate_limit)])
+@router.post("/conversations/{conversation_id}/log", dependencies=[Depends(rate_limit_light)])
 def conversation_log(conversation_id: str, body: LogTurn):
     """Turns answered in the page itself (e.g. "¿Te cuento más?" -> "sí")."""
     conversation = conversations.get(engine, conversation_id)
     if not conversation:
         raise HTTPException(status_code=404, detail="Conversación no encontrada")
     if conversations.has_consent(conversation) and not conversations.is_closed(conversation):
-        conversations.log_message(engine, conversation_id, "visitante", redact(body.question), is_question=True)
-        conversations.log_message(engine, conversation_id, "osky", body.answer, intent=body.intent)
+        conversations.log_exchange(engine, conversation_id, [
+            {"role": "visitante", "text": redact(body.question)},
+            {"role": "osky", "text": body.answer, "intent": body.intent},
+        ], is_question=True)
     return {"status": "ok"}
 
-@router.post("/conversations/{conversation_id}/contact", dependencies=[Depends(rate_limit)])
+@router.post("/conversations/{conversation_id}/contact", dependencies=[Depends(rate_limit_light)])
 def conversation_contact(conversation_id: str, body: ContactChoice):
     """The visitor chose an advisor in the WhatsApp picker."""
     conversation = conversations.get(engine, conversation_id)
@@ -242,6 +257,15 @@ def conversation_contact(conversation_id: str, body: ContactChoice):
         conversations.log_message(engine, conversation_id, "visitante", f"Abrió WhatsApp con {body.advisor}",
                               intent="whatsapp", source=f"WhatsApp → {body.advisor}")
     return {"status": "ok"}
+
+@router.get("/admin/client-ip", dependencies=[Depends(require_admin)])
+def admin_client_ip(request: Request):
+    """Shows how the proxy chain reaches the server, to tune TRUSTED_PROXY_HOPS in production."""
+    return {
+        "x_forwarded_for": request.headers.get("x-forwarded-for", ""),
+        "client_ip": client_ip(request),
+        "trusted_proxy_hops": settings.trusted_proxy_hops,
+    }
 
 @router.get("/admin/conversations", dependencies=[Depends(require_admin)])
 def admin_conversations(limit: int = Query(50, ge=1, le=200), offset: int = Query(0, ge=0), q: str = ""):
@@ -277,7 +301,7 @@ def ask(request: AskRequest):
     if category:
         return blocked_response(conversation, request.question, category)
     consent, name, history = _prepare(request, conversation)
-    response = _answer(request, name, history)
+    response = _answer(request, name, history, consent=consent)
     if response.pop("_forbidden", False):  # the language model saw a forbidden topic
         return blocked_response(conversation, request.question, "modelo")
     natural = response.pop("_natural", False)
@@ -312,7 +336,7 @@ def _stream_events(request: AskRequest):
         yield _event("done", **response)
         return
     consent, name, history = _prepare(request, conversation)
-    response = _answer(request, name, history, defer_llm=True)
+    response = _answer(request, name, history, defer_llm=True, consent=consent)
     llm = response.pop("_llm", None)
     use_name = _use_name(conversation, name)
     yield _meta(response, name)
@@ -329,7 +353,7 @@ def _stream_events(request: AskRequest):
             if sentence == OFF_TOPIC:
                 if said:
                     break  # part of an answer was already said: stop there
-                response, llm = off_topic_response(request), None  # (already logged)
+                response, llm = off_topic_response(request, consent), None  # (already logged)
                 yield _meta(response, name)  # replaces the sources/buttons of the first "meta"
                 break
             if not said and use_name:
@@ -338,22 +362,22 @@ def _stream_events(request: AskRequest):
             yield _event("sentence", text=sentence)
     if said:
         response.update(answer=" ".join(said), more="")
-        log_query(engine, request.question, None, response["answer"], "ok")
+        log_query(engine, request.question, None, response["answer"], "ok", consent=consent)
     else:
         # No model (or it failed before saying anything): the literal extract or the fixed reply.
         if llm:
-            log_query(engine, request.question, None, response["answer"], "ok")
+            log_query(engine, request.question, None, response["answer"], "ok", consent=consent)
         _personalize(response, request, name if use_name else None, natural=False)
         yield _event("sentence", text=response["answer"])
     _log_turn(conversation, consent, request.question, response)
     response["name"] = name
     yield _event("done", **response)
 
-def off_topic_response(request: AskRequest) -> dict:
+def off_topic_response(request: AskRequest, consent: bool = False) -> dict:
     """The question is not about the company: Osky doesn't answer it."""
     answer = (f"Solo puedo ayudarte con temas de {settings.company_name}, como nuestras soluciones, "
               "la empresa o cómo contactarnos. ¿Te cuento de alguna de nuestras soluciones?")
-    log_query(engine, request.question, None, answer, "off_topic")
+    log_query(engine, request.question, None, answer, "off_topic", consent)
     return {"status": "not_found", "source": None, "intent": "off_topic", "answer": answer, "more": "",
             "query": None, "result": None, "sources": [], "actions": []}
 
@@ -390,10 +414,13 @@ def _log_turn(conversation: dict | None, consent: bool, question: str, response:
     if response.get("actions"):
         parts.append(f"WhatsApp → {response['actions'][0]['contact']}")
     source = " · ".join(parts) or None
-    conversations.log_message(engine, conversation["id"], "visitante", question, is_question=True)
-    conversations.log_message(engine, conversation["id"], "osky", response["answer"], response["intent"], source)
+    conversations.log_exchange(engine, conversation["id"], [
+        {"role": "visitante", "text": question},
+        {"role": "osky", "text": response["answer"], "intent": response["intent"], "source": source},
+    ], is_question=True)
 
-def _answer(request: AskRequest, name: str | None, history: list[str], defer_llm: bool = False) -> dict:
+def _answer(request: AskRequest, name: str | None, history: list[str], defer_llm: bool = False,
+            consent: bool = False) -> dict:
     """The answer. defer_llm: don't call the model here; return what it needs in "_llm"
     (the caller streams it) and the literal extract as the fallback answer."""
     question = request.question
@@ -401,7 +428,7 @@ def _answer(request: AskRequest, name: str | None, history: list[str], defer_llm
     # 0. Conversation (hola, gracias, adiós...): fixed replies about Osky, no company data.
     talk = match_smalltalk(question)
     if talk:
-        log_query(engine, question, None, talk["answer"], f"smalltalk:{talk['intent']}")
+        log_query(engine, question, None, talk["answer"], f"smalltalk:{talk['intent']}", consent=consent)
         return {"status": "ok", "source": "persona", "intent": talk["intent"], "answer": talk["answer"],
                 "query": None, "result": None, "sources": [], "actions": []}
     question = strip_greeting(question)
@@ -413,7 +440,7 @@ def _answer(request: AskRequest, name: str | None, history: list[str], defer_llm
     if not detect_solution(question) and not STRONG_INTENT.search(question):
         rec = recommend(engine, question, request.style)
         if rec:
-            log_query(engine, question, None, rec["answer"], "needs")
+            log_query(engine, question, None, rec["answer"], "needs", consent=consent)
             action = whatsapp_action(rec["solutions"], name, history)
             return {"status": "ok", "source": "website", "intent": "answer", "answer": rec["answer"],
                     "more": rec["more"], "query": None, "result": None, "sources": rec["sources"],
@@ -446,7 +473,7 @@ def _answer(request: AskRequest, name: str | None, history: list[str], defer_llm
             answer = ("En este momento no tengo un asesor configurado para WhatsApp. "
                       "Puedes escribir a contacto@celuweb.com y te atenderán.")
             actions = []
-        log_query(engine, question, None, answer, "sales")
+        log_query(engine, question, None, answer, "sales", consent=consent)
         return {"status": "ok", "source": "sales", "intent": "sales", "answer": answer,
                 "query": None, "result": None, "sources": [], "actions": actions}
 
@@ -457,14 +484,14 @@ def _answer(request: AskRequest, name: str | None, history: list[str], defer_llm
             ast = parse_question(question, load_known_values(engine))
             result = execute_query(engine, ast)
             answer = build_answer(ast, result)
-            log_query(engine, question, ast, answer, "ok")
+            log_query(engine, question, ast, answer, "ok", consent=consent)
             return {"status": "ok", "source": "database", "intent": "answer", "answer": answer,
                     "query": ast.model_dump(), "result": result, "sources": [], "actions": []}
         except NotUnderstood:
             pass
         except ValueError as exc:
             answer = f"No puedo ejecutar esa consulta: {exc}."
-            log_query(engine, question, ast, answer, "rejected")
+            log_query(engine, question, ast, answer, "rejected", consent=consent)
             return {"status": "rejected", "source": "database", "intent": "answer", "answer": answer,
                     "query": ast.model_dump() if ast else None, "result": None, "sources": [], "actions": []}
 
@@ -483,12 +510,12 @@ def _answer(request: AskRequest, name: str | None, history: list[str], defer_llm
         if natural == FORBIDDEN:
             return {"_forbidden": True}
         if natural == OFF_TOPIC:
-            return off_topic_response(request)
+            return off_topic_response(request, consent)
         answer, more = (natural, "") if natural else (found["answer"], "")
         if not natural and request.style == "voice":
             answer, more = split_for_voice(answer)
         if not defer_llm:
-            log_query(engine, question, None, answer, "ok")
+            log_query(engine, question, None, answer, "ok", consent=consent)
         # After explaining a solution, offer a direct line to an advisor about it.
         top = found["sources"][0]
         actions = []
@@ -509,7 +536,7 @@ def _answer(request: AskRequest, name: str | None, history: list[str], defer_llm
     )
     if request.style == "voice":
         answer = f"Mmm, eso no lo encuentro en la información de {settings.company_name} y prefiero no inventar. ¿Te cuento de nuestras soluciones?"
-    log_query(engine, question, None, answer, "not_found")
+    log_query(engine, question, None, answer, "not_found", consent=consent)
     return {"status": "not_found", "source": None, "intent": "not_found", "answer": answer, "query": None,
             "result": None, "sources": [], "actions": []}
 

@@ -1,3 +1,12 @@
+/* Montserrat (latin, variable 400-800), hosted with the page: no third-party request. */
+@font-face {
+  font-family: "Montserrat";
+  font-style: normal;
+  font-weight: 400 800;
+  font-display: swap;
+  src: url("/fonts/montserrat-latin.woff2") format("woff2");
+}
+
 :root {
   --bg: #0b1220;
   --panel: #121b2e;
@@ -17,6 +26,11 @@
 * { box-sizing: border-box; }
 body { margin: 0; background: radial-gradient(1200px 600px at 20% -10%, #1c2a4d 0%, var(--bg) 60%); min-height: 100vh; }
 button { font: inherit; cursor: pointer; }
+
+/* Visible keyboard focus everywhere */
+button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible {
+  outline: 2px solid var(--accent); outline-offset: 2px;
+}
 button:disabled { opacity: 0.5; cursor: default; }
 
 .app { max-width: 1180px; margin: 0 auto; padding: 16px; display: flex; flex-direction: column; min-height: 100vh; }
@@ -106,7 +120,7 @@ button:disabled { opacity: 0.5; cursor: default; }
 .composer { display: flex; gap: 8px; }
 .composer input {
   flex: 1; min-width: 0; background: var(--panel-2); border: 1px solid #2c3a5e; color: var(--text);
-  padding: 12px 14px; border-radius: 12px; font: inherit;
+  padding: 12px 14px; border-radius: 12px; font: inherit; font-size: 16px; min-height: 44px;
 }
 .composer input:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
 .composer button { background: var(--accent); color: var(--accent-ink); border: none; padding: 0 18px; border-radius: 12px; font-weight: 700; }
@@ -143,7 +157,7 @@ button:disabled { opacity: 0.5; cursor: default; }
 .voice-settings__check small { font-size: 11.5px; opacity: 0.8; }
 .voice-settings__panel select, .voice-settings__panel input[type="range"] { width: 100%; }
 .voice-settings__panel select {
-  background: var(--panel-2); color: var(--text); border: 1px solid #2c3a5e; border-radius: 8px; padding: 8px; font: inherit; font-size: 13px;
+  background: var(--panel-2); color: var(--text); border: 1px solid #2c3a5e; border-radius: 8px; padding: 8px; font: inherit; font-size: 16px; min-height: 44px;
 }
 .voice-settings__panel input[type="range"] { accent-color: var(--accent); }
 .voice-settings__row { display: flex; gap: 8px; }
@@ -192,7 +206,7 @@ body { min-height: 100dvh; overflow: hidden; }
 .modes button, .chip { white-space: nowrap; }
 .modes button { display: inline-flex; align-items: center; gap: 6px; }
 .voice-settings__toggle { display: inline-flex; align-items: center; gap: 6px; }
-.chip, .modes button, .composer button, .persona__end { min-height: 36px; }
+.chip, .modes button, .composer button, .persona__end, .persona__mute { min-height: 44px; min-width: 44px; }
 
 /* Tablets and phones: compact Oski bar on top, chat fills the rest */
 @media (max-width: 860px) {
@@ -235,11 +249,10 @@ body { min-height: 100dvh; overflow: hidden; }
   .brand__name { font-size: 20px; }
   .topbar__actions { gap: 6px; }
   .voice-settings__toggle { padding: 6px 10px; }
+  .stage > .chip { min-height: 44px; }
   .voice-settings__toggle .chip__label { display: none; }
   .modes { padding: 3px; }
   .modes button { padding: 6px 10px; font-size: 13px; gap: 4px; }
-  /* 16px stops iPhone from zooming into the field */
-  .composer input, .persona__type input, .voice-settings__panel select { font-size: 16px; }
   .composer button { padding: 0 14px; }
   .chat { border-radius: 14px; }
   .bubble { font-size: 14.5px; padding: 10px 12px; }
@@ -288,7 +301,7 @@ button.action { border: 0; cursor: pointer; font: inherit; font-size: 14px; font
 .picker__head h2 { margin: 0 0 4px; font-size: 19px; }
 .picker__head p { margin: 0; color: var(--muted); font-size: 13.5px; line-height: 1.4; }
 .picker__close {
-  flex: none; width: 34px; height: 34px; border-radius: 50%; border: 1px solid #2c3a5e;
+  flex: none; width: 44px; height: 44px; border-radius: 50%; border: 1px solid #2c3a5e;
   background: var(--panel-2); color: var(--text); font-size: 15px; cursor: pointer;
 }
 .picker__list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
@@ -325,3 +338,11 @@ button.action { border: 0; cursor: pointer; font: inherit; font-size: 14px; font
   .advisor__contact { width: 100%; justify-content: center; }
 }
 @media (prefers-reduced-motion: reduce) { .picker, .picker__sheet { animation: none; } }
+
+/* Reduced motion: no looping or decorative animation (nothing depends on animationend) */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important; animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important; scroll-behavior: auto !important;
+  }
+}

@@ -6,7 +6,7 @@ at the same position and only rotated around its joint (pivot).
 Usage (from the repo root, with Pillow and numpy installed):
     python frontend/scripts/build_rig.py path/to/Astro-1.png
 
-Writes frontend/public/oski-rig/*.png and prints the pivots (in %) for CSS.
+Writes frontend/public/oski-rig/*.webp and prints the pivots (in %) for CSS.
 """
 import json
 import sys
@@ -87,7 +87,7 @@ def save(rgba: np.ndarray, alpha: np.ndarray, name: str) -> None:
     out = rgba.copy()
     out[..., 3] = np.clip(rgba[..., 3] * alpha, 0, 255)
     image = Image.fromarray(out.astype(np.uint8), "RGBA").resize((OUT_SIZE, OUT_SIZE), Image.LANCZOS)
-    image.save(OUT / f"{name}.png", optimize=True)
+    image.save(OUT / f"{name}.webp", "WEBP", quality=80, method=6)
 
 def main(src: str) -> None:
     OUT.mkdir(parents=True, exist_ok=True)

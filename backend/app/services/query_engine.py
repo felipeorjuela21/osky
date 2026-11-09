@@ -14,6 +14,7 @@ from sqlalchemy.engine import Engine
 
 from backend.app.core.data_dictionary import DATA_DICTIONARY, NUMERIC_TYPES
 from backend.app.core.db import TABLES, query_log
+from backend.app.services.privacy import redact
 
 SAFE_IDENTIFIER = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
 
@@ -143,16 +144,16 @@ def execute_query(engine: Engine, ast: QueryAST) -> dict:
         stmt = select(aggregate).select_from(table).where(*conditions)
         return {"value": _jsonable(conn.execute(stmt).scalar_one())}
 
-def log_query(engine: Engine, question: str | None, ast: QueryAST | None, answer: str, status: str) -> None:
+def log_query(engine: Engine, question: str | None, ast: QueryAST | None, answer: str, status: str,
+              consent: bool = False) -> None:
+    """Without the visitor's consent only the status/intent is stored (no question, no answer);
+    with it, the texts are stored with phones, e-mails and ID numbers redacted."""
+    values = {"status": status}
+    if consent:
+        values.update(question=redact(question) if question else question,
+                      query=ast.model_dump() if ast else None, answer=redact(answer))
     with engine.begin() as conn:
-        conn.execute(
-            insert(query_log).values(
-                question=question,
-                query=ast.model_dump() if ast else None,
-                answer=answer,
-                status=status,
-            )
-        )
+        conn.execute(insert(query_log).values(**values))
 
 def recent_logs(engine: Engine, limit: int = 20) -> list[dict]:
     stmt = select(query_log).order_by(query_log.c.id.desc()).limit(limit)

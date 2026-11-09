@@ -28,6 +28,97 @@ AZURE_BITRATE = 48_000  # bits per second of the format above (used to know the 
 class TTSUnavailable(RuntimeError):
     pass
 
+# ---------- reading aloud: what is SENT to the voice (the shown text is unchanged) ----------
+
+ACRONYMS = {
+    "TMS": "te eme ese",
+    "B2B": "be tu be",
+    "B2C": "be tu ce",
+    "CRM": "ce erre eme",
+    "ERP": "e erre pe",
+    "GPS": "ge pe ese",
+    "API": "a pe i",
+    "SMS": "ese eme ese",
+    "PDF": "pe de efe",
+    "QR": "cu erre",
+}
+# Colombian mobile: 300 123 4567 -> "300, 123, 45, 67" (optional +57 / 57 prefix).
+PHONE = re.compile(r"(?<![\d])(?:(\+?57)[\s-]?)?(3\d{2})[\s.-]?(\d{3})[\s.-]?(\d{2})[\s.-]?(\d{2})(?![\d])")
+URL = re.compile(r"^(?:https?://)?(?:www\.)?([\w-]+(?:\.[\w-]+)*\.(?:com|co|net|org|io))(?:/\S*)?$", re.IGNORECASE)
+_EDGE_PUNCT = re.compile(r"^([^\w+%]*)(.*?)([^\w%]*)$", re.DOTALL)
+
+def _phone_spoken(m: re.Match) -> str:
+    prefix = "más cincuenta y siete, " if m.group(1) else ""
+    return f"{prefix}{m.group(2)}, {m.group(3)}, {m.group(4)}, {m.group(5)}"
+
+def _token_spoken(token: str) -> str:
+    """Spoken form of one whitespace-free token, keeping its edge punctuation."""
+    lead, core, trail = _EDGE_PUNCT.match(token).groups()
+    if not core:
+        return token
+    if core in ACRONYMS:
+        spoken = ACRONYMS[core]
+    elif core == "%":
+        spoken = "por ciento"
+    elif core.endswith("%") and core[:-1].replace(",", "").replace(".", "").isdigit():
+        spoken = f"{core[:-1]} por ciento"
+    elif (m := URL.match(core)):
+        spoken = m.group(1).replace(".", " punto ")
+    else:
+        return token
+    return f"{lead}{spoken}{trail}"
+
+def _units(text: str) -> list[tuple[list[str], str]]:
+    """Splits `text` into (original words, spoken text) units, in order. A phone number spans
+    several original words; every other unit is one word."""
+    units: list[tuple[list[str], str]] = []
+    pos = 0
+    def plain(chunk: str):
+        for token in chunk.split():
+            units.append(([token], _token_spoken(token)))
+    for m in PHONE.finditer(text):
+        plain(text[pos:m.start()])
+        trail = re.match(r"[^\w\s]*", text[m.end():]).group(0)  # "." or ")" stuck to the number
+        units.append((m.group(0).split(), _phone_spoken(m) + trail))
+        pos = m.end() + len(trail)
+    plain(text[pos:])
+    return units
+
+def speakable(text: str) -> str:
+    """Text as it should be read aloud: acronyms spelled out, web addresses and phone numbers
+    pronounceable, "%" as "por ciento". Only for the voice engine, never for the screen."""
+    return " ".join(spoken for _, spoken in _units(text))
+
+def _spoken_count(spoken: str) -> int:
+    return len(re.findall(r"\S*\w\S*", spoken))
+
+def _original_count(words: list[str]) -> int:
+    return sum(1 for w in words if re.search(r"\w", w))
+
+def realign_words(text: str, words: list[dict]) -> list[dict]:
+    """The voice returns timings for the SPOKEN words ("te eme ese"). Map them back to the
+    words of the shown `text` ("TMS") so the karaoke captions stay in step: each unit's time
+    span is split evenly between its original words. If the counts don't match (the engine
+    tokenised differently), timings are estimated over the shown words."""
+    units = _units(text)
+    if all(spoken == " ".join(orig) for orig, spoken in units):
+        return words
+    if sum(_spoken_count(spoken) for _, spoken in units) != len(words):
+        end = words[-1]["start"] + words[-1]["duration"] if words else 0
+        return _estimate_words(text, end + 0.15) if end else words
+    out, i = [], 0
+    for orig, spoken in units:
+        n, shown = _spoken_count(spoken), [w for w in orig if re.search(r"\w", w)]
+        chunk, i = words[i:i + n], i + n
+        if not chunk or not shown:
+            continue
+        start, end = chunk[0]["start"], chunk[-1]["start"] + chunk[-1]["duration"]
+        step = (end - start) / len(shown)
+        for k, w in enumerate(shown):
+            clean = re.sub(r"^[^\w]+|[^\w]+$", "", w)
+            out.append({"text": clean, "start": round(start + k * step, 3), "duration": round(step, 3)})
+    return out
+
 def _estimate_words(text: str, seconds: float) -> list[dict]:
     """Azure's REST API returns no word timings: spread the words over the audio length,
     proportionally to their length (punctuation adds a short pause)."""
@@ -96,7 +187,8 @@ async def synthesize(text: str, voice: str | None = None, rate: str | None = Non
     errors = []
     for name in ([provider, "edge"] if provider == "azure" else [provider]):
         try:
-            audio, words = await (_azure if name == "azure" else _edge)(text, voice, rate)
+            audio, words = await (_azure if name == "azure" else _edge)(speakable(text), voice, rate)
+            words = realign_words(text, words)
             if audio:
                 break
         except Exception as exc:  # network errors, quota, service changes...

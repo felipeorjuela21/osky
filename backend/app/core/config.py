@@ -42,7 +42,10 @@ class Settings(BaseSettings):
 
     # Security for the public deployment.
     admin_token: str = ""  # required for /api/knowledge/refresh in production
-    rate_limit_per_minute: int = 30  # per visitor IP, for ask/tts/stt
+    rate_limit_per_minute: int = 30  # per visitor IP, for ask
+    media_rate_limit_per_minute: int = 90  # per visitor IP, for tts/stt (a spoken turn makes several calls)
+    global_rate_limit_per_minute: int = 300  # all visitors together, protects the free Groq quota
+    trusted_proxy_hops: int = 1  # proxies in front of the app: the visitor IP is that far from the END of X-Forwarded-For
     cors_origins: str = "http://localhost:5174,http://127.0.0.1:5174,https://localhost:5175"
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")

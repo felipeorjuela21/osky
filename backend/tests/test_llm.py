@@ -1,3 +1,5 @@
+import types
+
 import httpx
 
 from backend.app.core.config import settings
@@ -24,8 +26,7 @@ def test_retired_model_switches_to_an_available_one(monkeypatch):
     def fake_get(url, headers, timeout):
         return _response(200, {"data": [{"id": "whisper-large-v3"}, {"id": "openai/gpt-oss-120b"}]}, url)
 
-    monkeypatch.setattr(llm.httpx, "post", fake_post)
-    monkeypatch.setattr(llm.httpx, "get", fake_get)
+    monkeypatch.setattr(llm, "_client", types.SimpleNamespace(post=fake_post, get=fake_get))
     assert llm.natural_answer("¿Qué es TMS?", CONTEXT) == "Claro, TMS optimiza tu logística."
     assert used == [settings.llm_model, "openai/gpt-oss-120b"]
     assert llm.status["model"] == "openai/gpt-oss-120b" and llm.status["ok"] is True
@@ -35,8 +36,8 @@ def test_errors_are_reported_without_the_key(monkeypatch):
     monkeypatch.setattr(settings, "groq_api_key", "secret-key")
     monkeypatch.setattr(settings, "llm_provider", "groq")
     llm.status.update(model=None, ok=None, error=None)
-    monkeypatch.setattr(llm.httpx, "post", lambda url, headers, json, timeout: _response(
-        401, {"error": {"message": "Invalid API Key"}}, url))
+    monkeypatch.setattr(llm, "_client", types.SimpleNamespace(post=lambda url, headers, json, timeout: _response(
+        401, {"error": {"message": "Invalid API Key"}}, url)))
     assert llm.natural_answer("¿Qué es TMS?", CONTEXT) is None
     assert llm.status["ok"] is False and "401" in llm.status["error"] and "secret-key" not in llm.status["error"]
     llm.status.update(model=None, ok=None, error=None)

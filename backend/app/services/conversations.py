@@ -17,7 +17,7 @@ from sqlalchemy import delete, func, insert, select, update
 from sqlalchemy.engine import Engine
 
 from backend.app.core.config import settings
-from backend.app.core.db import chat_messages, conversations
+from backend.app.core.db import chat_messages, conversations, query_log
 
 COLOMBIA = timezone(timedelta(hours=-5))  # Colombia has no daylight saving time
 
@@ -139,12 +139,11 @@ def has_consent(conversation: dict | None) -> bool:
 def is_closed(conversation: dict | None) -> bool:
     return bool(conversation) and bool(conversation.get("ended_reason"))
 
-def accept(engine: Engine, conversation_id: str, name: str, user_agent: str = "") -> None:
+def accept(engine: Engine, conversation_id: str, name: str) -> None:
     """The visitor gave their name after the data notice: authorisation recorded."""
     with engine.begin() as conn:
         conn.execute(update(conversations).where(conversations.c.id == conversation_id).values(
             visitor_name=name, consent="si", consent_at=_now(), policy_version=settings.privacy_policy_version,
-            user_agent=user_agent[:200],
         ))
 
 def decline(engine: Engine, conversation_id: str) -> None:
@@ -179,6 +178,7 @@ def purge_expired(engine: Engine, days: int | None = None, force: bool = False) 
     with engine.begin() as conn:
         old = select(conversations.c.id).where(conversations.c.last_activity_at < cutoff)
         conn.execute(delete(chat_messages).where(chat_messages.c.conversation_id.in_(old)))
+        conn.execute(delete(query_log).where(query_log.c.created_at < cutoff))
         return conn.execute(delete(conversations).where(conversations.c.last_activity_at < cutoff)).rowcount
 
 def get(engine: Engine, conversation_id: str | None) -> dict | None:
@@ -192,16 +192,24 @@ def set_name(engine: Engine, conversation_id: str, name: str) -> None:
     with engine.begin() as conn:
         conn.execute(update(conversations).where(conversations.c.id == conversation_id).values(visitor_name=name))
 
-def log_message(engine: Engine, conversation_id: str, role: str, text: str,
-                intent: str | None = None, source: str | None = None, is_question: bool = False) -> None:
+def log_exchange(engine: Engine, conversation_id: str, messages: list[dict], is_question: bool = False) -> None:
+    """Stores several messages (dicts with role, text, intent, source) in ONE transaction;
+    the visitor's turn counts as a question when is_question."""
+    now = _now()
     with engine.begin() as conn:
-        conn.execute(insert(chat_messages).values(
-            conversation_id=conversation_id, created_at=_now(), role=role, text=text, intent=intent, source=source,
-        ))
-        values = {"last_activity_at": _now()}
+        conn.execute(insert(chat_messages), [
+            {"conversation_id": conversation_id, "created_at": now, "role": m["role"], "text": m["text"],
+             "intent": m.get("intent"), "source": m.get("source")}
+            for m in messages
+        ])
+        values = {"last_activity_at": now}
         if is_question:
             values["questions"] = conversations.c.questions + 1
         conn.execute(update(conversations).where(conversations.c.id == conversation_id).values(**values))
+
+def log_message(engine: Engine, conversation_id: str, role: str, text: str,
+                intent: str | None = None, source: str | None = None, is_question: bool = False) -> None:
+    log_exchange(engine, conversation_id, [{"role": role, "text": text, "intent": intent, "source": source}], is_question)
 
 def recent_questions(engine: Engine, conversation_id: str, limit: int = 3) -> list[str]:
     """Last questions the visitor asked (oldest first), for the advisor's WhatsApp message."""
@@ -229,17 +237,18 @@ def list_conversations(engine: Engine, limit: int = 50, offset: int = 0, search:
             query = query.where(func.lower(conversations.c.visitor_name).contains(search.lower(), autoescape=True))
         total = conn.execute(select(func.count()).select_from(query.subquery())).scalar_one()
         rows = conn.execute(query.order_by(conversations.c.started_at.desc()).limit(limit).offset(offset)).all()
-        items = []
-        for r in rows:
-            last = conn.execute(
-                select(chat_messages.c.text).where(chat_messages.c.conversation_id == r.id, chat_messages.c.role == "visitante")
-                .order_by(chat_messages.c.id.desc()).limit(1)
-            ).scalar_one_or_none()
-            items.append({
-                "id": r.id, "name": r.visitor_name or "Sin nombre", "channel": r.channel,
-                "started_at": _iso(r.started_at), "last_activity_at": _iso(r.last_activity_at),
-                "questions": r.questions, "last_question": last, "ended_reason": r.ended_reason,
-            })
+        # Last question of each conversation, in one query.
+        last_id = (select(func.max(chat_messages.c.id)).where(
+            chat_messages.c.conversation_id.in_([r.id for r in rows]), chat_messages.c.role == "visitante",
+        ).group_by(chat_messages.c.conversation_id))
+        last = dict(conn.execute(
+            select(chat_messages.c.conversation_id, chat_messages.c.text).where(chat_messages.c.id.in_(last_id))
+        ).all()) if rows else {}
+        items = [{
+            "id": r.id, "name": r.visitor_name or "Sin nombre", "channel": r.channel,
+            "started_at": _iso(r.started_at), "last_activity_at": _iso(r.last_activity_at),
+            "questions": r.questions, "last_question": last.get(r.id), "ended_reason": r.ended_reason,
+        } for r in rows]
     return {"total": total, "items": items}
 
 def transcript(engine: Engine, conversation_id: str) -> dict | None:
@@ -264,6 +273,10 @@ def transcript(engine: Engine, conversation_id: str) -> dict | None:
         ],
     }
 
+def _csv_safe(value: str) -> str:
+    """Spreadsheet formula injection: a cell that starts with = + - @ tab or return gets a leading '."""
+    return "'" + value if value[:1] in ("=", "+", "-", "@", chr(9), chr(13)) else value
+
 def export_csv(engine: Engine) -> str:
     """Every message with its conversation's name; times in Colombia (UTC-5). Excel-friendly."""
     with engine.connect() as conn:
@@ -281,7 +294,8 @@ def export_csv(engine: Engine) -> str:
     writer.writerow(["conversacion", "nombre", "canal", "inicio (hora Colombia)", "hora mensaje", "quien", "mensaje", "tipo", "fuente"])
     for r in rows:
         writer.writerow([
-            r.id, r.visitor_name or "Sin nombre", r.channel, _local(r.started_at), _local(r.created_at),
-            settings.agent_name if r.role == "osky" else "Visitante", r.text, r.intent or "", r.source or "",
+            r.id, _csv_safe(r.visitor_name or "Sin nombre"), r.channel, _local(r.started_at), _local(r.created_at),
+            settings.agent_name if r.role == "osky" else "Visitante", _csv_safe(r.text or ""), r.intent or "",
+            _csv_safe(r.source or ""),
         ])
     return "﻿" + out.getvalue()  # BOM so Excel shows accents correctly

@@ -32,6 +32,9 @@ PREFERRED_MODELS = [
 ]
 NOT_CHAT = re.compile(r"whisper|tts|guard|playai|orpheus|distil|compound", re.I)
 
+# One connection pool for every call: no new TLS handshake with Groq on each question.
+_client = httpx.Client(timeout=10, limits=httpx.Limits(max_keepalive_connections=5, keepalive_expiry=60))
+
 # What /health shows: the model in use and the last error (never the key).
 status: dict = {"model": None, "ok": None, "error": None}
 
@@ -40,7 +43,7 @@ def _headers() -> dict:
 
 def _available_model(exclude: str | None = None) -> str | None:
     """The configured model if Groq still offers it, otherwise the best available one."""
-    response = httpx.get(GROQ_MODELS_URL, headers=_headers(), timeout=8)
+    response = _client.get(GROQ_MODELS_URL, headers=_headers(), timeout=8)
     response.raise_for_status()
     ids = [m["id"] for m in response.json().get("data", []) if m.get("active", True) and m["id"] != exclude]
     for model in [settings.llm_model, *PREFERRED_MODELS]:
@@ -60,7 +63,7 @@ def _payload(model: str, messages: list[dict]) -> dict:
     return payload
 
 def _chat(model: str, messages: list[dict]) -> httpx.Response:
-    return httpx.post(GROQ_CHAT_URL, headers=_headers(), json=_payload(model, messages), timeout=10)
+    return _client.post(GROQ_CHAT_URL, headers=_headers(), json=_payload(model, messages), timeout=10)
 
 def _complete(messages: list[dict]) -> str:
     model = status["model"] or settings.llm_model
@@ -186,7 +189,7 @@ def _stream_lines(model: str, messages: list[dict]) -> Iterator[tuple[str, str |
     """(text delta, finish_reason) from Groq's server-sent events."""
     payload = {**_payload(model, messages), "stream": True}
     timeout = httpx.Timeout(10, read=15)
-    with httpx.stream("POST", GROQ_CHAT_URL, headers=_headers(), json=payload, timeout=timeout) as response:
+    with _client.stream("POST", GROQ_CHAT_URL, headers=_headers(), json=payload, timeout=timeout) as response:
         if response.status_code >= 400:
             response.read()
             response.raise_for_status()
