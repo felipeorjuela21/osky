@@ -15,7 +15,9 @@ from sqlalchemy import (
     create_engine,
     func,
     insert,
+    inspect,
     select,
+    text,
 )
 from sqlalchemy.engine import Engine
 
@@ -75,7 +77,24 @@ conversations = Table(
     Column("last_activity_at", DateTime),  # UTC
     Column("questions", Integer, default=0),
     Column("user_agent", String(200)),
+    # Habeas data: "si" once the visitor accepted (by giving their name after the notice),
+    # "no" if they declined. Without "si" nothing personal is stored.
+    Column("consent", String(5)),
+    Column("consent_at", DateTime),  # UTC
+    Column("policy_version", String(40)),
+    # Why the conversation was closed by Osky (e.g. "lenguaje_inapropiado").
+    Column("ended_reason", String(40)),
 )
+
+# Columns added after the first release: created on existing databases at startup.
+LATER_COLUMNS = {
+    "conversations": {
+        "consent": "VARCHAR(5)",
+        "consent_at": "TIMESTAMP",
+        "policy_version": "VARCHAR(40)",
+        "ended_reason": "VARCHAR(40)",
+    },
+}
 
 # Every message of every conversation, in order.
 chat_messages = Table(
@@ -113,8 +132,21 @@ def make_engine(url: str | None = None) -> Engine:
         return create_engine(url, connect_args={"check_same_thread": False})
     return create_engine(url, pool_pre_ping=True)
 
+def _add_missing_columns(engine: Engine) -> None:
+    """create_all() does not alter existing tables: add the newer columns by hand."""
+    inspector = inspect(engine)
+    for table, columns in LATER_COLUMNS.items():
+        if not inspector.has_table(table):
+            continue
+        existing = {c["name"] for c in inspector.get_columns(table)}
+        with engine.begin() as conn:
+            for name, sql_type in columns.items():
+                if name not in existing:
+                    conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {name} {sql_type}"))
+
 def init_db(engine: Engine, seed: bool = True) -> None:
     metadata.create_all(engine)
+    _add_missing_columns(engine)
     if not seed:
         return
     with engine.begin() as conn:

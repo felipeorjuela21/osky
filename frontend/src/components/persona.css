@@ -85,6 +85,8 @@
 .captions__oski .w--now { opacity: 1; color: var(--accent); }
 .captions__source { font-size: 13px; color: var(--accent); text-decoration: none; opacity: 0.85; }
 .captions__source:hover { text-decoration: underline; }
+.captions__privacy { max-width: 560px; margin: 0 auto; font-size: 12.5px; line-height: 1.4; opacity: 0.8; text-align: center; }
+.captions__privacy a { color: var(--accent); }
 
 /* ---------- Controls ---------- */
 .persona__controls { padding: 8px 16px 20px; display: flex; flex-direction: column; align-items: center; gap: 8px; }

@@ -1,11 +1,12 @@
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Action, AgentInfo, Source, ask, logTurn, sendName, startConversation, topicOf } from "../api";
-import { Playback, speakWithLevels, unlockAudio } from "../audio";
+import { Action, AgentInfo, AskResponse, Source, Turn, askStream, logTurn, sendName, startConversation, topicOf } from "../api";
+import { Playback, sharedAudioContext, speakWithLevels, unlockAudio } from "../audio";
 import { ListenHandle, canListen } from "../speech";
-import { ListenPhase, canRecord, listenTurn } from "../stt";
+import { ListenPhase, canRecord, listenTurn, serverSttUsable } from "../stt";
 import { Speech, fetchSpeech, wordOffsets } from "../voice";
+import { VoiceInput, canBargeIn } from "../voiceInput";
 import { ActionButtons, SourceLabel } from "./Actions";
-import { looksLikeQuestion } from "./ChatView";
+import { PRIVACY_URL, looksLikeQuestion } from "./ChatView";
 import { OskiRig, RigGesture, RigMood } from "./OskiRig";
 import "./persona.css";
 
@@ -24,11 +25,24 @@ const STATUS: Record<State, string> = {
   thinking: "Pensando…",
   speaking: "Hablando · toca a Osky o pulsa espacio para interrumpir",
 };
+const SPEAKING_BARGE_IN = "Hablando · puedes interrumpirme hablando";
 
 const MORE_PROMPTS = ["¿Te cuento más?", "¿Quieres más detalles?", "¿Te sigo contando?"];
-const YES = /^(si|sip|claro|dale|ok|okey|bueno|por favor|cuentame( mas)?|mas|quiero saber mas|de una|obvio|sigue|continua)\b/;
-const NO = /^(no|nop|asi esta bien|no gracias|listo gracias|esta bien)\b/;
+// Whole reply only: anything longer ("sí, y cuánto cuesta?") goes to the server (and its language filter).
+const YES = /^(si|sip|claro|dale|ok|okey|bueno|por favor|cuentame( mas)?|mas|quiero saber mas|de una|obvio|sigue|continua)( (si|claro|dale|por favor|gracias|cuentame( mas)?|osky|oski))*$/;
+const NO = /^(no|nop|asi esta bien|no gracias|listo gracias|esta bien)( (gracias|osky|oski))*$/;
 const MAX_SILENT_TURNS = 2;
+
+/** First sentence alone, the rest together: Osky starts talking as soon as the
+    first sentence is synthesised while the rest is prepared in the background. */
+function speechChunks(text: string): string[] {
+  if (text.length < 90) return [text];
+  const end = /[.!?](\s|$)/g;
+  end.lastIndex = 25;
+  const match = end.exec(text);
+  if (!match || match.index > text.length - 20) return [text];
+  return [text.slice(0, match.index + 1), text.slice(match.index + 1).trim()];
+}
 
 const sleep = (ms: number) => new Promise((r) => window.setTimeout(r, ms));
 const pick = <T,>(items: T[]) => items[Math.floor(Math.random() * items.length)];
@@ -81,7 +95,16 @@ export function PersonaView({ agent }: { agent: AgentInfo | null }) {
 
   const name = agent?.name ?? "Osky";
   const company = agent?.company ?? "CeluWeb";
-  const greeting = `¡Hola! Soy ${name}, el asistente virtual de ${company}. Antes de empezar, ¿cómo te llamas?`;
+  // Same words as the server's greeting (routes.greeting_text): the data notice, then the name.
+  const greeting =
+    `¡Hola! Soy ${name}, el asistente virtual de ${company}. Para atenderte mejor guardo tu nombre y lo que hablemos, ` +
+    "según nuestra política de datos. Si estás de acuerdo, ¿cómo te llamas? Si no, dime que no y seguimos sin guardar nada.";
+  const [askingConsent, setAskingConsent] = useState(false);
+  const history = useRef<Turn[]>([]);
+  // Silero VAD listening (loaded on the first conversation); null = loudness-based fallback.
+  const input = useRef<VoiceInput | null>(null);
+  const inputLoading = useRef<Promise<void> | null>(null);
+  const [vadReady, setVadReady] = useState(false);
 
   // Warm up the greeting's neural voice so the first words come out instantly.
   const greetingSpeech = useRef<Promise<Speech | null> | null>(null);
@@ -150,30 +173,104 @@ export function PersonaView({ agent }: { agent: AgentInfo | null }) {
     return () => window.clearTimeout(t);
   }, []);
 
-  const say = useCallback(
-    async (text: string, id: number, feeling: RigMood = "neutral", speech?: Promise<Speech | null> | null) => {
-      if (session.current !== id) return;
-      const audio = await (speech ?? fetchSpeech(text));
-      if (session.current !== id) return;
-      setMood(feeling);
-      setOskiText(text);
-      setSpokenUntil(-1);
-      setState("speaking");
-      const offsets = audio ? wordOffsets(text, audio.words) : [];
-      const words = [...text.matchAll(/\S+/g)];
-      const handle = await speakWithLevels(text, audio, {
-        onLevel: (level) => (voiceLevel.current = level),
-        onWord: (i) => setSpokenUntil(audio ? offsets[i] ?? 0 : words[i]?.index ?? 0),
+  /** Osky's voice as a queue: sentences can be added while he is already talking
+      (streamed answers). Each sentence's audio is requested the moment it arrives and
+      plays right after the previous one. Interrupting (tap, space, or talking over him)
+      cancels the whole queue. */
+  const speaker = useCallback((id: number, feeling: RigMood = "neutral") => {
+    type Item = { text: string; base: number; audio: Promise<Speech | null> };
+    const queue: Item[] = [];
+    let full = "";
+    let mood = feeling;
+    let closed = false;
+    let cancelled = false;
+    let started = false;
+    let current: Playback | null = null;
+    let wake: (() => void) | null = null;
+    const nudge = () => {
+      const resume = wake;
+      wake = null;
+      resume?.();
+    };
+    const alive = () => !cancelled && session.current === id;
+    playback.current = {
+      done: Promise.resolve(),
+      cancel: () => {
+        cancelled = true;
+        current?.cancel();
+        nudge();
+      },
+    };
+
+    const add = (text: string, audio?: Promise<Speech | null> | null) => {
+      if (!alive() || !text.trim()) return;
+      (audio ? [text] : speechChunks(text)).forEach((piece, i) => {
+        const base = full ? full.length + 1 : 0;
+        full = full ? `${full} ${piece}` : piece;
+        queue.push({ text: piece, base, audio: i === 0 && audio ? audio : fetchSpeech(piece) });
       });
-      playback.current = handle;
-      await handle.done;
+      if (started) setOskiText(full);
+      nudge();
+    };
+
+    const done = (async () => {
+      while (alive()) {
+        const item = queue.shift();
+        if (!item) {
+          if (closed) break;
+          await new Promise<void>((resume) => (wake = resume));
+          continue;
+        }
+        const audio = await item.audio;
+        if (!alive()) break;
+        if (!started) {
+          started = true;
+          setMood(mood);
+          setSpokenUntil(-1);
+          setState("speaking");
+          void input.current?.setMode("speaking");
+        }
+        setOskiText(full);
+        const offsets = audio ? wordOffsets(item.text, audio.words) : [];
+        const words = [...item.text.matchAll(/\S+/g)];
+        current = await speakWithLevels(item.text, audio, {
+          onLevel: (level) => (voiceLevel.current = level),
+          onWord: (i) => setSpokenUntil(item.base + (audio ? offsets[i] ?? 0 : words[i]?.index ?? 0)),
+        });
+        if (!alive()) current.cancel(); // interrupted while the audio was being prepared
+        await current.done;
+      }
       voiceLevel.current = 0;
-      if (session.current === id) {
+      if (started && session.current === id) {
         setSpokenUntil(Number.MAX_SAFE_INTEGER);
         setMood("neutral");
       }
+    })();
+
+    return {
+      add,
+      close: () => {
+        closed = true;
+        nudge();
+      },
+      setFeeling: (f: RigMood) => {
+        mood = f;
+        if (started) setMood(f);
+      },
+      done,
+      text: () => full,
+    };
+  }, []);
+
+  const say = useCallback(
+    async (text: string, id: number, feeling: RigMood = "neutral", speech?: Promise<Speech | null> | null) => {
+      if (session.current !== id) return;
+      const voice = speaker(id, feeling);
+      voice.add(text, speech);
+      voice.close();
+      await voice.done;
     },
-    [],
+    [speaker],
   );
 
   /** Resolves with what the user said (voice) or typed. "" means silence. */
@@ -191,15 +288,20 @@ export function PersonaView({ agent }: { agent: AgentInfo | null }) {
         finish(text);
       };
       if ((!canRecord && !canListen) || micBlocked.current || session.current !== id) return; // wait for typed text
-      const handle = listenTurn({
-        onLevel: (level) => root.current?.style.setProperty("--mic", level.toFixed(2)),
-        onPhase: setPhase,
-        onInterim: setUserText,
-        onError: (message, blocked) => {
-          if (blocked) micBlocked.current = true;
-          setError(message);
-        },
-      });
+      const onError = (message: string, blocked?: boolean) => {
+        if (blocked) micBlocked.current = true;
+        setError(message);
+      };
+      const vad = input.current && serverSttUsable() ? input.current : null;
+      if (vad) void vad.setMode("listening");
+      const handle = vad
+        ? vad.listen({ onPhase: setPhase, onError })
+        : listenTurn({
+            onLevel: (level) => root.current?.style.setProperty("--mic", level.toFixed(2)),
+            onPhase: setPhase,
+            onInterim: setUserText,
+            onError,
+          });
       listenHandle.current = handle;
       void handle.result.then((text) => {
         if (text) setError(null);
@@ -215,11 +317,38 @@ export function PersonaView({ agent }: { agent: AgentInfo | null }) {
     typedTurn.current = null;
     pendingMore.current = "";
     voiceLevel.current = 0;
+    void input.current?.setMode("off"); // closes the microphone
+    setAskingConsent(false);
     setActive(false);
     setState("idle");
   }, []);
 
-  useEffect(() => end, [end]);
+  useEffect(
+    () => () => {
+      end();
+      void input.current?.destroy();
+      input.current = null;
+    },
+    [end],
+  );
+
+  /** Loads Silero VAD once (in the background, while Osky greets). If it fails,
+      listening keeps using the loudness detector. */
+  const loadVoiceInput = useCallback(() => {
+    if (input.current || inputLoading.current || !canRecord) return;
+    inputLoading.current = VoiceInput.create(sharedAudioContext(), {
+      onLevel: (level) => root.current?.style.setProperty("--mic", level.toFixed(2)),
+      // Talking over Osky: he stops and listens.
+      onBargeIn: () => {
+        if (stateRef.current === "speaking") playback.current?.cancel();
+      },
+    })
+      .then((vad) => {
+        input.current = vad;
+        setVadReady(true);
+      })
+      .catch((e) => console.warn("Silero VAD no disponible; uso el detector por volumen.", e));
+  }, []);
 
   /** Listens for one turn; handles silence and a blocked microphone. null = conversation ended. */
   const nextTurn = useCallback(
@@ -232,6 +361,7 @@ export function PersonaView({ agent }: { agent: AgentInfo | null }) {
         if (heard) {
           silent.count = 0;
           setUserText(heard);
+          void input.current?.setMode("thinking");
           return heard;
         }
         if (micBlocked.current) {
@@ -262,28 +392,43 @@ export function PersonaView({ agent }: { agent: AgentInfo | null }) {
     setSource(null);
     setActions([]);
     topic.current = null;
+    history.current = [];
 
-    // The conversation is created while Osky says hello (it logs name and questions).
+    /** Offensive language: Osky says why and the conversation ends right there. */
+    const closeConversation = async (reply: string) => {
+      setAskingConsent(false);
+      setActions([]);
+      playback.current?.cancel();
+      await say(reply, id, "unsure");
+      if (alive()) end();
+    };
+
+    // The conversation is created while Osky says hello (it logs name and questions),
+    // and the voice activity detector loads meanwhile.
+    loadVoiceInput();
     const conversation = startConversation("persona").catch(() => null);
     playGesture("wave", 1800);
+    setAskingConsent(true); // the policy link stays on screen while Osky asks
     await say(greeting, id, "happy", greetingSpeech.current);
     conversationId.current = (await conversation)?.id ?? null;
     const silent = { count: 0 };
 
-    // 1. The visitor's name first, to talk to them personally.
+    // 1. The data notice and the visitor's name: giving it authorises the data use.
     let firstQuestion: string | null = null;
     if (conversationId.current) {
       for (let attempt = 1; alive(); attempt++) {
-        const heard = await nextTurn(id, silent, "¿Me dices tu nombre? Así te atiendo mejor.");
+        const heard = await nextTurn(id, silent, "¿Me dices tu nombre? O dime que no y seguimos sin guardar tus datos.");
         if (heard === null) return;
         const result = await sendName(conversationId.current, heard, attempt).catch(() => null);
         if (!alive()) return;
         if (!result) break; // the log is unavailable: keep talking anyway
+        if (result.ended) return closeConversation(result.reply);
         if (result.name) setVisitorName(result.name);
         if (result.status === "retry") {
           await say(result.reply, id);
           continue;
         }
+        setAskingConsent(false);
         if (result.status === "skip" && looksLikeQuestion(heard)) {
           firstQuestion = heard; // it was a question: answer it right away
           break;
@@ -293,6 +438,7 @@ export function PersonaView({ agent }: { agent: AgentInfo | null }) {
         break;
       }
     }
+    setAskingConsent(false);
 
     // 2. The conversation.
     while (alive()) {
@@ -317,29 +463,58 @@ export function PersonaView({ agent }: { agent: AgentInfo | null }) {
       }
 
       setState("thinking");
-      let response;
+      // The answer arrives sentence by sentence and Osky starts with the first one.
+      // The server already words it warmly and with the visitor's name ("Claro, Ana. ...").
+      const voice = speaker(id);
+      let response: AskResponse;
       try {
-        response = await ask(question, "voice", topic.current, conversationId.current);
+        response = await askStream(
+          question,
+          {
+            onMeta: (meta) => {
+              if (!alive()) return;
+              if (meta.ended) {
+                setActions([]);
+                voice.setFeeling("unsure");
+                return;
+              }
+              setSource(meta.sources[0] ?? null);
+              setActions(meta.actions ?? []);
+              if (meta.intent === "not_found") playGesture("shrug", 1300);
+              else if (["greeting", "goodbye", "thanks", "sales"].includes(meta.intent)) playGesture("wave", 1800);
+              voice.setFeeling(meta.intent === "not_found" ? "unsure" : meta.intent === "answer" ? "neutral" : "happy");
+            },
+            onSentence: (sentence) => voice.add(sentence),
+          },
+          topic.current,
+          conversationId.current,
+          history.current,
+        );
       } catch {
+        voice.close();
+        await voice.done;
         if (!alive()) return;
+        if (voice.text()) continue; // the answer was cut, but part of it was said
         await say("Uy, no pude conectarme con el servidor. Inténtalo de nuevo en un momento.", id, "unsure");
         if (alive()) end();
         return;
       }
-      if (!alive()) return;
+      if (response.ended) {
+        // Offensive language: Osky says why (already queued) and the conversation ends.
+        voice.close();
+        await voice.done;
+        setAskingConsent(false);
+        if (alive()) end();
+        return;
+      }
 
-      setSource(response.sources[0] ?? null);
-      setActions(response.actions ?? []);
+      history.current = [...history.current, { q: question, a: response.answer }].slice(-3);
       topic.current = topicOf(response) ?? topic.current;
       pendingMore.current = response.more ?? "";
-      // The server already words it warmly and with the visitor's name ("Claro, Ana. ...").
-      const text = pendingMore.current ? `${response.answer} ${pick(MORE_PROMPTS)}` : response.answer;
-
-      if (response.intent === "not_found") playGesture("shrug", 1300);
-      else if (["greeting", "goodbye", "thanks", "sales"].includes(response.intent)) playGesture("wave", 1800);
-      const feeling: RigMood =
-        response.intent === "not_found" ? "unsure" : response.intent === "answer" ? "neutral" : "happy";
-      await say(text, id, feeling);
+      if (pendingMore.current) voice.add(pick(MORE_PROMPTS));
+      voice.close();
+      await voice.done;
+      if (!alive()) return;
 
       if (response.intent === "goodbye" && alive()) {
         setEntrance("leave"); // floats away...
@@ -350,7 +525,7 @@ export function PersonaView({ agent }: { agent: AgentInfo | null }) {
         return;
       }
     }
-  }, [end, greeting, nextTurn, playGesture, say]);
+  }, [end, greeting, loadVoiceInput, nextTurn, playGesture, say, speaker]);
 
   const interrupt = useCallback(() => {
     if (stateRef.current === "speaking") playback.current?.cancel();
@@ -442,6 +617,14 @@ export function PersonaView({ agent }: { agent: AgentInfo | null }) {
             ))}
           </p>
         )}
+        {askingConsent && (
+          <p className="captions__privacy">
+            Al decirle tu nombre a {name} autorizas a {company} a tratar tus datos (Ley 1581 de 2012).{" "}
+            <a href={PRIVACY_URL} target="_blank" rel="noreferrer">
+              Política de tratamiento de datos
+            </a>
+          </p>
+        )}
         {state !== "listening" && <SourceLabel source={source} className="captions__source" />}
         {/* WhatsApp buttons stay visible while Osky listens, so they can be tapped. */}
         <ActionButtons actions={actions} conversationId={conversationId.current} />
@@ -471,7 +654,11 @@ export function PersonaView({ agent }: { agent: AgentInfo | null }) {
               ) : (
                 <i />
               )}{" "}
-              {state === "listening" ? LISTEN_STATUS[phase] : STATUS[state]}
+              {state === "listening"
+                ? LISTEN_STATUS[phase]
+                : state === "speaking" && vadReady && canBargeIn
+                  ? SPEAKING_BARGE_IN
+                  : STATUS[state]}
             </span>
             <form className="persona__type" onSubmit={onType}>
               <input value={typed} onChange={(e) => setTyped(e.target.value)} placeholder="…o escribe aquí" aria-label="Escribir a Osky" />

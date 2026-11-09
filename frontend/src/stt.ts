@@ -92,6 +92,25 @@ export function levelMeter(stream: MediaStream) {
 }
 
 let serverSttAvailable = true;
+/** false once the server said it can't transcribe: the browser's recognition is used instead. */
+export const serverSttUsable = () => canRecord && serverSttAvailable;
+
+/** Sends one recorded turn to Whisper on our server. "" if it could not be transcribed. */
+export async function transcribeOnServer(blob: Blob, onError?: (message: string, blocked?: boolean) => void): Promise<string> {
+  try {
+    const response = await fetch(apiUrl("/api/stt"), { method: "POST", headers: { "Content-Type": blob.type }, body: blob });
+    if (response.status === 503) {
+      serverSttAvailable = false; // use the browser's recognition from now on
+      onError?.("El reconocimiento de voz del servidor no está disponible; uso el del navegador.");
+      return "";
+    }
+    if (!response.ok) throw new Error(String(response.status));
+    return ((await response.json()) as { text: string }).text.trim();
+  } catch {
+    onError?.("No pude transcribir tu voz. ¿Está corriendo el servidor de Osky?");
+    return "";
+  }
+}
 
 function pickMimeType(): string {
   const options = ["audio/webm;codecs=opus", "audio/webm", "audio/ogg;codecs=opus", "audio/mp4"];
@@ -194,20 +213,7 @@ export function listenTurn(opts: ListenOptions = {}): ListenHandle {
     }
 
     opts.onPhase?.("transcribing");
-    const blob = new Blob(chunks, { type: recorder.mimeType || "audio/webm" });
-    try {
-      const response = await fetch(apiUrl("/api/stt"), { method: "POST", headers: { "Content-Type": blob.type }, body: blob });
-      if (response.status === 503) {
-        serverSttAvailable = false; // use the browser's recognition from now on
-        opts.onError?.("El reconocimiento de voz del servidor no está disponible; uso el del navegador.");
-        return "";
-      }
-      if (!response.ok) throw new Error(String(response.status));
-      return ((await response.json()) as { text: string }).text.trim();
-    } catch {
-      opts.onError?.("No pude transcribir tu voz. ¿Está corriendo el servidor de Osky?");
-      return "";
-    }
+    return transcribeOnServer(new Blob(chunks, { type: recorder.mimeType || "audio/webm" }), opts.onError);
   })();
 
   return {

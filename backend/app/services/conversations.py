@@ -1,8 +1,10 @@
 """Conversations with visitors: their name, and a log of every question/answer.
 
-Osky asks for the visitor's name first, then uses it in the conversation. Each
-conversation (name + date/time) and its messages are stored so CeluWeb can review
-what people ask (admin page / CSV export).
+Osky first tells the visitor that the conversation is stored under CeluWeb's data
+policy and asks their name: giving it is their authorisation (Ley 1581 de 2012,
+Decreto 1377 de 2013 art. 7, "conducta inequívoca"). Only then are the name and the
+messages stored (admin page / CSV export). If they decline, nothing is stored.
+Stored conversations are deleted after DATA_RETENTION_DAYS.
 """
 import csv
 import io
@@ -11,7 +13,7 @@ import unicodedata
 import uuid
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import func, insert, select, update
+from sqlalchemy import delete, func, insert, select, update
 from sqlalchemy.engine import Engine
 
 from backend.app.core.config import settings
@@ -80,13 +82,13 @@ def name_reply(text: str, attempt: int) -> dict:
     if name:
         return {"status": "ok", "name": name,
                 "reply": f"¡Mucho gusto, {name}! ¿En qué te puedo ayudar hoy?"}
-    if DECLINE.search(_plain(text)):
+    if DECLINE.search(_plain(text)) or re.fullmatch(r"\W*(no|nop|nel|no gracias)\W*", _plain(text)):
         return {"status": "declined", "name": None,
-                "reply": "No hay problema. ¿En qué te puedo ayudar hoy?"}
+                "reply": "No hay problema, no guardaré nada de esta conversación. ¿En qué te puedo ayudar?"}
     if attempt <= 1:
         return {"status": "retry", "name": None,
                 "reply": "Perdona, no te entendí el nombre. ¿Cómo te llamas?"}
-    return {"status": "skip", "name": None, "reply": "No hay problema, sigamos."}
+    return {"status": "skip", "name": None, "reply": "No hay problema, sigamos sin guardar tus datos."}
 
 def personalize(answer: str, name: str | None, intent: str, ack: str) -> str:
     """Adds the visitor's name naturally: '¡Con gusto, Ana!', 'Mira, Ana. TMS: ...'."""
@@ -101,19 +103,83 @@ def personalize(answer: str, name: str | None, intent: str, ack: str) -> str:
         return f"{ack}, {name}. {answer}"
     return answer
 
+OPENERS = re.compile(r"^(claro|mira|perfecto|bueno|genial|excelente|listo|con gusto|te cuento|por supuesto|s[ií])([,.]\s*)", re.I)
+
+def add_name(answer: str, name: str) -> str:
+    """Name in a model-written answer: '¡Claro! ...' -> '¡Claro, Ana! ...', 'Mira, ...' -> 'Mira, Ana, ...'."""
+    match = re.match(r"^¡([^!]{1,40})!", answer)
+    if match:
+        return f"¡{match.group(1)}, {name}!{answer[match.end():]}"
+    match = OPENERS.match(answer)
+    if match:
+        sep = ". " if "." in match.group(2) else ", "
+        return f"{match.group(1)}, {name}{sep}{answer[match.end():]}"
+    first = answer.split(" ", 1)[0]
+    keep_case = not first[1:].islower() or first.lower() in {settings.company_name.lower(), settings.agent_name.lower()}
+    return f"{name}, {answer if keep_case else answer[:1].lower() + answer[1:]}"
+
 # ---------- storage ----------
 
 def _now() -> datetime:
     return datetime.now(timezone.utc).replace(tzinfo=None)  # stored as naive UTC
 
-def start(engine: Engine, channel: str, user_agent: str = "") -> str:
+def start(engine: Engine, channel: str) -> str:
+    """A new conversation, still without consent: nothing personal is stored yet."""
+    purge_expired(engine)
     conversation_id = str(uuid.uuid4())
     with engine.begin() as conn:
         conn.execute(insert(conversations).values(
-            id=conversation_id, channel=channel, started_at=_now(), last_activity_at=_now(),
-            questions=0, user_agent=user_agent[:200],
+            id=conversation_id, channel=channel, started_at=_now(), last_activity_at=_now(), questions=0,
         ))
     return conversation_id
+
+def has_consent(conversation: dict | None) -> bool:
+    return bool(conversation) and conversation.get("consent") == "si"
+
+def is_closed(conversation: dict | None) -> bool:
+    return bool(conversation) and bool(conversation.get("ended_reason"))
+
+def accept(engine: Engine, conversation_id: str, name: str, user_agent: str = "") -> None:
+    """The visitor gave their name after the data notice: authorisation recorded."""
+    with engine.begin() as conn:
+        conn.execute(update(conversations).where(conversations.c.id == conversation_id).values(
+            visitor_name=name, consent="si", consent_at=_now(), policy_version=settings.privacy_policy_version,
+            user_agent=user_agent[:200],
+        ))
+
+def decline(engine: Engine, conversation_id: str) -> None:
+    with engine.begin() as conn:
+        conn.execute(update(conversations).where(conversations.c.id == conversation_id).values(
+            consent="no", consent_at=_now(), policy_version=settings.privacy_policy_version,
+        ))
+
+def close(engine: Engine, conversation_id: str, reason: str) -> None:
+    """Osky ends the conversation (e.g. offensive language): no more turns are answered."""
+    with engine.begin() as conn:
+        conn.execute(update(conversations).where(conversations.c.id == conversation_id).values(
+            ended_reason=reason, last_activity_at=_now(),
+        ))
+
+def remove(engine: Engine, conversation_id: str) -> bool:
+    """Deletes a conversation and its messages (the visitor's right to deletion)."""
+    with engine.begin() as conn:
+        conn.execute(delete(chat_messages).where(chat_messages.c.conversation_id == conversation_id))
+        return conn.execute(delete(conversations).where(conversations.c.id == conversation_id)).rowcount > 0
+
+_last_purge: dict = {"at": None}
+
+def purge_expired(engine: Engine, days: int | None = None, force: bool = False) -> int:
+    """Deletes conversations older than the retention period (checked at most once an hour)."""
+    days = settings.data_retention_days if days is None else days
+    now = _now()
+    if days <= 0 or (not force and _last_purge["at"] and now - _last_purge["at"] < timedelta(hours=1)):
+        return 0
+    _last_purge["at"] = now
+    cutoff = now - timedelta(days=days)
+    with engine.begin() as conn:
+        old = select(conversations.c.id).where(conversations.c.last_activity_at < cutoff)
+        conn.execute(delete(chat_messages).where(chat_messages.c.conversation_id.in_(old)))
+        return conn.execute(delete(conversations).where(conversations.c.last_activity_at < cutoff)).rowcount
 
 def get(engine: Engine, conversation_id: str | None) -> dict | None:
     if not conversation_id:
@@ -172,7 +238,7 @@ def list_conversations(engine: Engine, limit: int = 50, offset: int = 0, search:
             items.append({
                 "id": r.id, "name": r.visitor_name or "Sin nombre", "channel": r.channel,
                 "started_at": _iso(r.started_at), "last_activity_at": _iso(r.last_activity_at),
-                "questions": r.questions, "last_question": last,
+                "questions": r.questions, "last_question": last, "ended_reason": r.ended_reason,
             })
     return {"total": total, "items": items}
 
@@ -189,6 +255,9 @@ def transcript(engine: Engine, conversation_id: str) -> dict | None:
         "name": conversation["visitor_name"] or "Sin nombre",
         "channel": conversation["channel"],
         "started_at": _iso(conversation["started_at"]),
+        "consent_at": _iso(conversation["consent_at"]),
+        "policy_version": conversation["policy_version"],
+        "ended_reason": conversation["ended_reason"],
         "messages": [
             {"at": _iso(r.created_at), "role": r.role, "text": r.text, "intent": r.intent, "source": r.source}
             for r in rows

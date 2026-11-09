@@ -34,6 +34,12 @@ class Settings(BaseSettings):
     stt_provider: str = "auto"
     stt_model: str = "base"  # local whisper model
 
+    # Personal data (Ley 1581 de 2012): the visitor's name and the conversation are only
+    # stored after they accept; stored conversations are deleted after this many days.
+    privacy_policy_url: str = "https://www.celuweb.com/?page_id=18917"
+    privacy_policy_version: str = "SI-POL-002 V02"
+    data_retention_days: int = 365
+
     # Security for the public deployment.
     admin_token: str = ""  # required for /api/knowledge/refresh in production
     rate_limit_per_minute: int = 30  # per visitor IP, for ask/tts/stt

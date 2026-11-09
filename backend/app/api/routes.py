@@ -1,9 +1,12 @@
+import json
 import random
+import re
 from datetime import datetime
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.concurrency import run_in_threadpool
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from backend.app.core.config import settings
@@ -14,12 +17,14 @@ from backend.app.services import conversations
 from backend.app.services.answer import build_answer
 from backend.app.services.knowledge import answer_from_knowledge, get_index, knowledge_stats, split_for_voice
 from backend.app.services.needs import recommend
-from backend.app.services.llm import natural_answer
+from backend.app.services.moderation import closing_message, is_offensive
+from backend.app.services.privacy import redact
+from backend.app.services.llm import natural_answer, stream_natural_answer
 from backend.app.services.stt import STTUnavailable, transcribe
 from backend.app.services.tts import TTSUnavailable, allowed_voice, spanish_voices, synthesize
 from backend.app.services.sales import SOLUTIONS, STRONG_INTENT, detect_solution, is_sales_request, whatsapp_action
 from backend.app.services.smalltalk import match_smalltalk, strip_greeting
-from backend.app.services.nl_parser import NotUnderstood, load_known_values, parse_question
+from backend.app.services.nl_parser import NotUnderstood, load_known_values, normalize, parse_question
 from backend.app.services.query_engine import (
     QueryAST,
     average_field,
@@ -39,6 +44,10 @@ HELP_TEXT = (
     "por nuestra misión y visión, o pedirme hablar con un asesor comercial por WhatsApp."
 )
 
+class Turn(BaseModel):
+    q: str = Field(..., max_length=500)
+    a: str = Field(..., max_length=2000)
+
 class AskRequest(BaseModel):
     question: str = Field(..., min_length=1, max_length=500)
     # "voice": short spoken answer, the rest is returned in "more".
@@ -47,8 +56,14 @@ class AskRequest(BaseModel):
     topic: str | None = Field(default=None, max_length=120)
     # Conversation with the visitor: personalises with their name and logs the turn.
     conversation_id: str | None = Field(default=None, max_length=36)
+    # Last turns shown on the page, so "¿y eso cuánto cuesta?" is understood.
+    history: list[Turn] = Field(default_factory=list, max_length=3)
 
 ACKS = ["Claro", "Mira", "Te cuento", "Con gusto"]
+# Short questions that refer to the previous answer.
+# How often the visitor's name is used after the first answer.
+NAME_RATE = 0.35
+FOLLOW_UP = re.compile(r"^(y|y que|y como|y cuanto|y para|tambien|ademas)\b|\b(eso|esa|ese|esto|lo mismo)\b")
 
 class StartConversation(BaseModel):
     channel: Literal["chat", "persona"] = "chat"
@@ -154,37 +169,64 @@ def structured_query(ast: QueryAST):
 @router.post("/conversations", dependencies=[Depends(rate_limit)])
 def start_conversation(body: StartConversation, request: Request):
     """Starts a chat: Osky greets and asks the visitor's name first."""
-    conversation_id = conversations.start(engine, body.channel, request.headers.get("user-agent", ""))
-    greeting = (f"¡Hola! Soy {settings.agent_name}, el asistente virtual de {settings.company_name}. "
-                "Antes de empezar, ¿cómo te llamas? Así te atiendo de forma más personal.")
-    return {"id": conversation_id, "greeting": greeting}
+    conversation_id = conversations.start(engine, body.channel)
+    return {"id": conversation_id, "greeting": greeting_text(), "privacy_url": settings.privacy_policy_url}
+
+def greeting_text() -> str:
+    """First words of every conversation: who Osky is, the data notice and the name question."""
+    return (f"¡Hola! Soy {settings.agent_name}, el asistente virtual de {settings.company_name}. "
+            "Para atenderte mejor guardo tu nombre y lo que hablemos, según nuestra política de datos. "
+            "Si estás de acuerdo, ¿cómo te llamas? Si no, dime que no y seguimos sin guardar nada.")
+
+def blocked_response(conversation: dict | None, question: str) -> dict:
+    """Offensive language: Osky closes the conversation and answers nothing else in it."""
+    answer = closing_message(settings.company_name)
+    if conversation and not conversations.is_closed(conversation):
+        if conversations.has_consent(conversation):
+            conversations.log_message(engine, conversation["id"], "visitante", redact(question), intent="bloqueado")
+            conversations.log_message(engine, conversation["id"], "osky", answer, intent="bloqueado")
+        conversations.close(engine, conversation["id"], "lenguaje_inapropiado")
+    log_query(engine, None, None, answer, "blocked")  # the offensive text itself is not kept here
+    return {"status": "blocked", "source": None, "intent": "blocked", "answer": answer, "query": None,
+            "result": None, "sources": [], "actions": [], "ended": True, "name": None}
 
 @router.post("/conversations/{conversation_id}/name", dependencies=[Depends(rate_limit)])
-def conversation_name(conversation_id: str, body: NameRequest):
-    if not conversations.get(engine, conversation_id):
+def conversation_name(conversation_id: str, body: NameRequest, request: Request):
+    """Reply to the data notice + name question. Giving the name = authorising the data use."""
+    conversation = conversations.get(engine, conversation_id)
+    if not conversation:
         raise HTTPException(status_code=404, detail="Conversación no encontrada")
+    if conversations.is_closed(conversation) or is_offensive(body.text):
+        blocked = blocked_response(conversation, body.text)
+        return {"status": "blocked", "name": None, "reply": blocked["answer"], "ended": True}
     result = conversations.name_reply(body.text, body.attempt)
-    if result["name"]:
-        conversations.set_name(engine, conversation_id, result["name"])
-    conversations.log_message(engine, conversation_id, "visitante", body.text, intent="nombre")
-    conversations.log_message(engine, conversation_id, "osky", result["reply"], intent="nombre")
+    if result["status"] == "ok":
+        conversations.accept(engine, conversation_id, result["name"], request.headers.get("user-agent", ""))
+        conversations.log_message(engine, conversation_id, "visitante", body.text, intent="nombre")
+        conversations.log_message(engine, conversation_id, "osky", result["reply"], intent="nombre")
+    elif result["status"] in ("declined", "skip"):
+        conversations.decline(engine, conversation_id)
     return result
 
 @router.post("/conversations/{conversation_id}/log", dependencies=[Depends(rate_limit)])
 def conversation_log(conversation_id: str, body: LogTurn):
     """Turns answered in the page itself (e.g. "¿Te cuento más?" -> "sí")."""
-    if not conversations.get(engine, conversation_id):
+    conversation = conversations.get(engine, conversation_id)
+    if not conversation:
         raise HTTPException(status_code=404, detail="Conversación no encontrada")
-    conversations.log_message(engine, conversation_id, "visitante", body.question, is_question=True)
-    conversations.log_message(engine, conversation_id, "osky", body.answer, intent=body.intent)
+    if conversations.has_consent(conversation) and not conversations.is_closed(conversation):
+        conversations.log_message(engine, conversation_id, "visitante", redact(body.question), is_question=True)
+        conversations.log_message(engine, conversation_id, "osky", body.answer, intent=body.intent)
     return {"status": "ok"}
 
 @router.post("/conversations/{conversation_id}/contact", dependencies=[Depends(rate_limit)])
 def conversation_contact(conversation_id: str, body: ContactChoice):
     """The visitor chose an advisor in the WhatsApp picker."""
-    if not conversations.get(engine, conversation_id):
+    conversation = conversations.get(engine, conversation_id)
+    if not conversation:
         raise HTTPException(status_code=404, detail="Conversación no encontrada")
-    conversations.log_message(engine, conversation_id, "visitante", f"Abrió WhatsApp con {body.advisor}",
+    if conversations.has_consent(conversation):
+        conversations.log_message(engine, conversation_id, "visitante", f"Abrió WhatsApp con {body.advisor}",
                               intent="whatsapp", source=f"WhatsApp → {body.advisor}")
     return {"status": "ok"}
 
@@ -199,6 +241,13 @@ def admin_conversation(conversation_id: str):
         raise HTTPException(status_code=404, detail="Conversación no encontrada")
     return result
 
+@router.delete("/admin/conversations/{conversation_id}", dependencies=[Depends(require_admin)])
+def admin_delete_conversation(conversation_id: str):
+    """Right to deletion (Ley 1581): removes the conversation and all its messages."""
+    if not conversations.remove(engine, conversation_id):
+        raise HTTPException(status_code=404, detail="Conversación no encontrada")
+    return {"status": "deleted"}
+
 @router.get("/admin/export.csv", dependencies=[Depends(require_admin)])
 def admin_export():
     filename = f"osky-conversaciones-{datetime.now():%Y%m%d}.csv"
@@ -210,33 +259,106 @@ def admin_export():
 @router.post("/ask", dependencies=[Depends(rate_limit)])
 def ask(request: AskRequest):
     conversation = conversations.get(engine, request.conversation_id)
-    name = conversation["visitor_name"] if conversation else None
-    # What the visitor asked before: it goes in the WhatsApp message to the advisor.
-    history = conversations.recent_questions(engine, conversation["id"], 2) if conversation else []
-    response = _answer(request, name, [*history, request.question])
-
-    # Warm, personal wording: "Claro, Ana. TMS: ..." (natural answers already include it).
-    if not response.pop("_natural", False):
-        ack = random.choice(ACKS)
-        if name:
-            response["answer"] = conversations.personalize(response["answer"], name, response["intent"], ack)
-        elif request.style == "voice" and response["intent"] == "answer":
-            response["answer"] = f"{ack}. {response['answer']}"
-
-    # Log the turn in the visitor's conversation.
-    if conversation:
-        parts = []
-        if response.get("sources"):
-            parts.append(response["sources"][0]["title"])
-        if response.get("actions"):
-            parts.append(f"WhatsApp → {response['actions'][0]['contact']}")
-        source = " · ".join(parts) or None
-        conversations.log_message(engine, conversation["id"], "visitante", request.question, is_question=True)
-        conversations.log_message(engine, conversation["id"], "osky", response["answer"], response["intent"], source)
+    # 0. Insults, obscenities or sexual content end the conversation right away.
+    if conversations.is_closed(conversation) or is_offensive(request.question):
+        return blocked_response(conversation, request.question)
+    consent, name, history = _prepare(request, conversation)
+    response = _answer(request, name, history)
+    natural = response.pop("_natural", False)
+    use_name = _use_name(conversation, name)
+    _personalize(response, request, name if use_name else None, natural)
+    _log_turn(conversation, consent, request.question, response)
     response["name"] = name
     return response
 
-def _answer(request: AskRequest, name: str | None, history: list[str]) -> dict:
+@router.post("/ask/stream", dependencies=[Depends(rate_limit)])
+def ask_stream(request: AskRequest):
+    """Same answer as /ask, streamed as NDJSON so the voice persona starts talking
+    with the first sentence: {"type": "meta"}, then {"type": "sentence", "text"}...,
+    then {"type": "done", ...full response}."""
+    return StreamingResponse(_stream_events(request), media_type="application/x-ndjson",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+def _event(kind: str, **data) -> str:
+    return json.dumps({"type": kind, **data}, ensure_ascii=False) + "\n"
+
+def _meta(response: dict, name: str | None) -> str:
+    keys = ("status", "source", "intent", "sources", "actions", "ended")
+    return _event("meta", name=name, **{k: response[k] for k in keys if k in response})
+
+def _stream_events(request: AskRequest):
+    conversation = conversations.get(engine, request.conversation_id)
+    if conversations.is_closed(conversation) or is_offensive(request.question):
+        response = blocked_response(conversation, request.question)
+        yield _meta(response, None)
+        yield _event("sentence", text=response["answer"])
+        yield _event("done", **response)
+        return
+    consent, name, history = _prepare(request, conversation)
+    response = _answer(request, name, history, defer_llm=True)
+    llm = response.pop("_llm", None)
+    use_name = _use_name(conversation, name)
+    yield _meta(response, name)
+
+    said: list[str] = []
+    if llm:
+        for sentence in stream_natural_answer(request.question, llm["context"], request.style, llm["turns"]):
+            if not said and use_name:
+                sentence = conversations.add_name(sentence, name)
+            said.append(sentence)
+            yield _event("sentence", text=sentence)
+    if said:
+        response.update(answer=" ".join(said), more="")
+        log_query(engine, request.question, None, response["answer"], "ok")
+    else:
+        # No model (or it failed before saying anything): the literal extract or the fixed reply.
+        if llm:
+            log_query(engine, request.question, None, response["answer"], "ok")
+        _personalize(response, request, name if use_name else None, natural=False)
+        yield _event("sentence", text=response["answer"])
+    _log_turn(conversation, consent, request.question, response)
+    response["name"] = name
+    yield _event("done", **response)
+
+def _prepare(request: AskRequest, conversation: dict | None) -> tuple[bool, str | None, list[str]]:
+    # Phones, e-mails and ID numbers are not needed to answer: never stored nor sent to the LLM.
+    request.question = redact(request.question)
+    consent = conversations.has_consent(conversation)
+    name = conversation["visitor_name"] if consent else None
+    # What the visitor asked before: it goes in the WhatsApp message to the advisor.
+    history = conversations.recent_questions(engine, conversation["id"], 2) if consent else []
+    return consent, name, [*history, request.question]
+
+def _use_name(conversation: dict | None, name: str | None) -> bool:
+    """The name in the first answer, then only now and then: repeating it sounds scripted."""
+    return bool(name) and (conversation["questions"] == 0 or random.random() < NAME_RATE)
+
+def _personalize(response: dict, request: AskRequest, name: str | None, natural: bool) -> None:
+    """Warm wording: "Claro, Ana. ..." (name only when given)."""
+    ack = random.choice(ACKS)
+    if name and natural:
+        response["answer"] = conversations.add_name(response["answer"], name)
+    elif name:
+        response["answer"] = conversations.personalize(response["answer"], name, response["intent"], ack)
+    elif not natural and request.style == "voice" and response["intent"] == "answer":
+        response["answer"] = f"{ack}. {response['answer']}"
+
+def _log_turn(conversation: dict | None, consent: bool, question: str, response: dict) -> None:
+    """Logs the turn in the visitor's conversation (only with their authorisation)."""
+    if not consent:
+        return
+    parts = []
+    if response.get("sources"):
+        parts.append(response["sources"][0]["title"])
+    if response.get("actions"):
+        parts.append(f"WhatsApp → {response['actions'][0]['contact']}")
+    source = " · ".join(parts) or None
+    conversations.log_message(engine, conversation["id"], "visitante", question, is_question=True)
+    conversations.log_message(engine, conversation["id"], "osky", response["answer"], response["intent"], source)
+
+def _answer(request: AskRequest, name: str | None, history: list[str], defer_llm: bool = False) -> dict:
+    """The answer. defer_llm: don't call the model here; return what it needs in "_llm"
+    (the caller streams it) and the literal extract as the fallback answer."""
     question = request.question
 
     # 0. Conversation (hola, gracias, adiós...): fixed replies about Osky, no company data.
@@ -310,14 +432,22 @@ def _answer(request: AskRequest, name: str | None, history: list[str]) -> dict:
                     "query": ast.model_dump() if ast else None, "result": None, "sources": [], "actions": []}
 
     # 2. Company website knowledge.
-    found = answer_from_knowledge(engine, question)
+    found = None
+    # Follow-ups ("¿y eso para qué sirve?") are searched together with the previous topic.
+    if request.topic and FOLLOW_UP.search(normalize(question)):
+        found = answer_from_knowledge(engine, f"{request.topic} {question}")
+    found = found or answer_from_knowledge(engine, question)
+    if not found and request.topic:
+        found = answer_from_knowledge(engine, f"{request.topic} {question}")
     if found:
         # Natural wording from the same sources (Groq); literal extract as fallback.
-        natural = natural_answer(question, found["context"], request.style, name)
+        turns = [{"q": redact(t.q), "a": t.a} for t in request.history]
+        natural = None if defer_llm else natural_answer(question, found["context"], request.style, turns)
         answer, more = (natural, "") if natural else (found["answer"], "")
         if not natural and request.style == "voice":
             answer, more = split_for_voice(answer)
-        log_query(engine, question, None, answer, "ok")
+        if not defer_llm:
+            log_query(engine, question, None, answer, "ok")
         # After explaining a solution, offer a direct line to an advisor about it.
         top = found["sources"][0]
         actions = []
@@ -325,9 +455,12 @@ def _answer(request: AskRequest, name: str | None, history: list[str]) -> dict:
             action = whatsapp_action(top["title"] if top["title"] in SOLUTIONS else None, name, history)
             if action:
                 actions = [action]
-        return {"status": "ok", "source": "website", "intent": "answer", "answer": answer, "more": more,
-                "query": None, "result": None, "sources": found["sources"], "actions": actions,
-                "_natural": bool(natural)}
+        response = {"status": "ok", "source": "website", "intent": "answer", "answer": answer, "more": more,
+                    "query": None, "result": None, "sources": found["sources"], "actions": actions,
+                    "_natural": bool(natural)}
+        if defer_llm:
+            response["_llm"] = {"context": found["context"], "turns": turns}
+        return response
 
     answer = (
         f"Mmm, eso no lo encuentro en la información oficial de {settings.company_name}, y prefiero no inventar. "

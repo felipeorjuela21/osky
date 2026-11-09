@@ -4,6 +4,7 @@ import {
   ConversationSummary,
   Transcript,
   adminConversations,
+  adminDelete,
   adminExportCsv,
   adminTranscript,
 } from "../api";
@@ -65,6 +66,17 @@ export function AdminView() {
       setSelected(await adminTranscript(token, id));
     } catch {
       setError("No pude abrir la conversación.");
+    }
+  };
+
+  const remove = async (id: string, name: string) => {
+    if (!window.confirm(`¿Borrar la conversación de ${name} y todos sus mensajes? No se puede deshacer.`)) return;
+    try {
+      await adminDelete(token, id);
+      setSelected(null);
+      void load(offset);
+    } catch {
+      setError("No pude borrar la conversación.");
     }
   };
 
@@ -136,6 +148,7 @@ export function AdminView() {
               <span className="admin__meta">
                 {dateFmt.format(new Date(c.started_at))} · {c.channel === "persona" ? "🧑‍🚀 Persona" : "💬 Chat"} · {c.questions}{" "}
                 {c.questions === 1 ? "pregunta" : "preguntas"}
+                {c.ended_reason === "lenguaje_inapropiado" && " · ⛔ Cerrada por lenguaje"}
               </span>
               {c.last_question && <span className="admin__last">“{c.last_question}”</span>}
             </button>
@@ -158,7 +171,12 @@ export function AdminView() {
             <h2>{selected.name}</h2>
             <p className="admin__meta">
               {dateFmt.format(new Date(selected.started_at))} · {selected.channel === "persona" ? "Persona" : "Chat"}
+              {selected.consent_at && ` · Autorizó datos: ${dateFmt.format(new Date(selected.consent_at))} (${selected.policy_version ?? "política"})`}
+              {selected.ended_reason === "lenguaje_inapropiado" && " · ⛔ Cerrada por lenguaje inapropiado"}
             </p>
+            <button className="admin__delete" onClick={() => void remove(selected.id, selected.name)}>
+              Borrar conversación (solicitud del titular)
+            </button>
             <ol className="admin__messages">
               {selected.messages.map((m, i) => (
                 <li key={i} className={`admin__msg admin__msg--${m.role}`}>

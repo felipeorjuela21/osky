@@ -4,12 +4,16 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
+    "predev": "node scripts/copy-vad-assets.mjs",
     "dev": "vite",
+    "prebuild": "node scripts/copy-vad-assets.mjs",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
+    "predev:lan": "node scripts/copy-vad-assets.mjs",
     "dev:lan": "vite --mode lan"
   },
   "dependencies": {
+    "@ricky0123/vad-web": "0.0.31",
     "react": "^19.1.0",
     "react-dom": "^19.1.0"
   },

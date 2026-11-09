@@ -1,5 +1,5 @@
 import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
-import { Action, AgentInfo, Source, ask, sendName, startConversation, topicOf } from "../api";
+import { Action, AgentInfo, Source, Turn, ask, sendName, startConversation, topicOf } from "../api";
 import { ActionButtons, SourceLabel } from "./Actions";
 import { useSpeech } from "../hooks/useSpeech";
 import { AgentState, OskiAvatar } from "./OskiAvatar";
@@ -44,6 +44,10 @@ export function ChatView({ agent }: { agent: AgentInfo | null }) {
   const askingName = useRef(false);
   const nameAttempt = useRef(1);
   const [waitingName, setWaitingName] = useState(false);
+  // Osky closed the conversation (offensive language): no more questions in it.
+  const [ended, setEnded] = useState(false);
+  const endedRef = useRef(false);
+  const history = useRef<Turn[]>([]);
   const voiceOnRef = useRef(voiceOn);
   voiceOnRef.current = voiceOn;
 
@@ -55,14 +59,23 @@ export function ChatView({ agent }: { agent: AgentInfo | null }) {
 
   const handleQuestion = useCallback(async (question: string) => {
     const text = question.trim();
-    if (!text) return;
+    if (!text || endedRef.current) return;
     push({ role: "user", text });
     setInput("");
     setThinking(true);
+    const close = (reply: string) => {
+      endedRef.current = true;
+      setEnded(true);
+      askingName.current = false;
+      setWaitingName(false);
+      push({ role: "oski", text: reply, notFound: true });
+      say(reply);
+    };
     try {
       if (askingName.current && conversationId.current) {
         const result = await sendName(conversationId.current, text, nameAttempt.current);
         nameAttempt.current += 1;
+        if (result.ended) return close(result.reply);
         push({ role: "oski", text: result.reply });
         if (result.status !== "retry") {
           askingName.current = false;
@@ -74,7 +87,9 @@ export function ChatView({ agent }: { agent: AgentInfo | null }) {
           return;
         }
       }
-      const response = await ask(text, "chat", topic.current, conversationId.current);
+      const response = await ask(text, "chat", topic.current, conversationId.current, history.current);
+      if (response.ended) return close(response.answer);
+      history.current = [...history.current, { q: text, a: response.answer }].slice(-3);
       topic.current = topicOf(response) ?? topic.current;
       push({
         role: "oski",
@@ -94,19 +109,36 @@ export function ChatView({ agent }: { agent: AgentInfo | null }) {
 
   const speech = useSpeech(handleQuestion);
 
-  const greeted = useRef(false); // StrictMode runs effects twice in development
-  useEffect(() => {
-    if (!agent || greeted.current) return;
-    greeted.current = true;
+  const begin = useCallback((info: AgentInfo) => {
     startConversation("chat")
       .then((conversation) => {
         conversationId.current = conversation.id;
         askingName.current = true;
+        nameAttempt.current = 1;
         setWaitingName(true);
         push({ role: "oski", text: conversation.greeting, privacy: true });
       })
-      .catch(() => push({ role: "oski", text: agent.greeting })); // keeps working without the log
-  }, [agent]);
+      .catch(() => push({ role: "oski", text: info.greeting })); // keeps working without the log
+  }, []);
+
+  const greeted = useRef(false); // StrictMode runs effects twice in development
+  useEffect(() => {
+    if (!agent || greeted.current) return;
+    greeted.current = true;
+    begin(agent);
+  }, [agent, begin]);
+
+  const restart = () => {
+    if (!agent) return;
+    speech.stopSpeaking();
+    endedRef.current = false;
+    setEnded(false);
+    history.current = [];
+    topic.current = null;
+    conversationId.current = null;
+    setMessages([]);
+    begin(agent);
+  };
 
   useEffect(() => {
     listEnd.current?.scrollIntoView({ behavior: "smooth" });
@@ -162,9 +194,10 @@ export function ChatView({ agent }: { agent: AgentInfo | null }) {
               <SourceLabel source={m.sources?.[0]} className="source" />
               {m.privacy && (
                 <p className="privacy-note">
-                  Guardamos tu nombre y tus preguntas para atenderte mejor.{" "}
+                  Al darnos tu nombre autorizas a CeluWeb a tratar tus datos (Ley 1581 de 2012) para atenderte. Si
+                  respondes «no», no guardamos nada.{" "}
                   <a href={PRIVACY_URL} target="_blank" rel="noreferrer">
-                    Política de datos
+                    Política de tratamiento de datos
                   </a>
                 </p>
               )}
@@ -177,7 +210,14 @@ export function ChatView({ agent }: { agent: AgentInfo | null }) {
         {backendError && <p className="error">{backendError}</p>}
 
         {/* Suggestions appear once Osky knows the visitor's name. */}
-        {!waitingName && (
+        {ended && (
+          <div className="suggestions">
+            <button className="chip" onClick={restart}>
+              Empezar una nueva conversación
+            </button>
+          </div>
+        )}
+        {!waitingName && !ended && (
           <div className="suggestions">
             {SUGGESTIONS.map((s) => (
               <button key={s} className="chip" onClick={() => void handleQuestion(s)} disabled={thinking}>
@@ -191,11 +231,12 @@ export function ChatView({ agent }: { agent: AgentInfo | null }) {
           <input
             value={input}
             onChange={(e) => setInput(e.target.value)}
-            placeholder={waitingName ? "Escribe tu nombre…" : "Escribe tu pregunta sobre CeluWeb…"}
+            placeholder={ended ? "Conversación terminada" : waitingName ? "Tu nombre, o «no»…" : "Escribe tu pregunta sobre CeluWeb…"}
             maxLength={500}
+            disabled={ended}
             aria-label={waitingName ? "Tu nombre" : "Pregunta"}
           />
-          <button type="submit" disabled={!input.trim() || thinking}>
+          <button type="submit" disabled={!input.trim() || thinking || ended}>
             Enviar
           </button>
         </form>

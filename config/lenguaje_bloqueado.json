@@ -1,0 +1,5 @@
+{
+  "_ayuda": "Lenguaje que termina la conversación de inmediato. Osky ya trae una lista de groserías, insultos y contenido sexual (backend/app/services/moderation.py). Aquí puedes agregar palabras o frases ('bloquear') o permitir una que esté bloqueando por error ('permitir'). No distingue mayúsculas ni tildes. Los cambios se aplican sin reiniciar.",
+  "bloquear": [],
+  "permitir": []
+}

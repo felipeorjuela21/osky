@@ -10,6 +10,8 @@ export default defineConfig(({ mode }) => {
   const lan = mode === "lan";
   return {
     plugins: lan ? [react(), basicSsl()] : [react()],
+    // The ONNX runtime (voice activity detector) loads its .wasm/.mjs from public/vad/ at run time.
+    optimizeDeps: { exclude: ["onnxruntime-web"] },
     server: {
       port: lan ? 5175 : 5174,
       host: lan ? true : "localhost",

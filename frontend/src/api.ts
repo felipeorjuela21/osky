@@ -11,9 +11,9 @@ export type Action = {
 };
 
 export type AskResponse = {
-  status: "ok" | "not_found" | "not_understood" | "rejected";
+  status: "ok" | "not_found" | "not_understood" | "rejected" | "blocked";
   source: "website" | "database" | "persona" | null;
-  intent: "answer" | "not_found" | "sales" | "greeting" | "how_are_you" | "identity" | "help" | "thanks" | "goodbye";
+  intent: "answer" | "not_found" | "sales" | "greeting" | "how_are_you" | "identity" | "help" | "thanks" | "goodbye" | "blocked";
   answer: string;
   /** Rest of the answer when style is "voice" (offered with "¿te cuento más?"). */
   more?: string;
@@ -22,9 +22,14 @@ export type AskResponse = {
   actions?: Action[];
   /** Visitor's name, when the conversation has one. */
   name?: string | null;
+  /** true: Osky closed the conversation (offensive language); no more turns. */
+  ended?: boolean;
 };
 
-export type NameResult = { status: "ok" | "retry" | "declined" | "skip"; name: string | null; reply: string };
+/** A previous question and answer, so follow-ups ("¿y eso cuánto cuesta?") are understood. */
+export type Turn = { q: string; a: string };
+
+export type NameResult = { status: "ok" | "retry" | "declined" | "skip" | "blocked"; name: string | null; reply: string; ended?: boolean };
 
 export type AgentInfo = {
   name: string;
@@ -51,18 +56,82 @@ const post = <T,>(path: string, body: unknown) =>
 
 /** topic: subject of the previous answer, so "quiero cotizar" reaches the right advisor.
     conversationId: personalises with the visitor's name and logs the turn. */
-export const ask = (question: string, style: "chat" | "voice" = "chat", topic?: string | null, conversationId?: string | null) =>
+export const ask = (
+  question: string,
+  style: "chat" | "voice" = "chat",
+  topic?: string | null,
+  conversationId?: string | null,
+  history: Turn[] = [],
+) =>
   post<AskResponse>("/api/ask", {
     question,
     style,
     topic: topic || undefined,
     conversation_id: conversationId || undefined,
+    history: history.slice(-3).map((t) => ({ q: t.q.slice(0, 500), a: t.a.slice(0, 2000) })),
   });
+
+export type AskMeta = Pick<AskResponse, "status" | "source" | "intent" | "sources" | "actions" | "ended" | "name">;
+
+/** Same as ask(), but the answer arrives sentence by sentence (voice persona):
+    onMeta first (intent, sources, WhatsApp buttons), then onSentence for each sentence
+    as the model writes it. Resolves with the full response. */
+export async function askStream(
+  question: string,
+  handlers: { onMeta?: (meta: AskMeta) => void; onSentence?: (text: string) => void },
+  topic?: string | null,
+  conversationId?: string | null,
+  history: Turn[] = [],
+): Promise<AskResponse> {
+  const body = {
+    question,
+    style: "voice",
+    topic: topic || undefined,
+    conversation_id: conversationId || undefined,
+    history: history.slice(-3).map((t) => ({ q: t.q.slice(0, 500), a: t.a.slice(0, 2000) })),
+  };
+  const response = await fetch(apiUrl("/api/ask/stream"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (response.status === 404 || response.status === 405 || !response.body) {
+    // Older backend without streaming: one piece.
+    const full = await ask(question, "voice", topic, conversationId, history);
+    handlers.onMeta?.(full);
+    handlers.onSentence?.(full.answer);
+    return full;
+  }
+  if (!response.ok) throw new Error(`Error ${response.status} en /api/ask/stream`);
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let done: AskResponse | null = null;
+  const handle = (line: string) => {
+    if (!line.trim()) return;
+    const event = JSON.parse(line) as { type: string; text?: string } & AskResponse;
+    if (event.type === "meta") handlers.onMeta?.(event);
+    else if (event.type === "sentence" && event.text) handlers.onSentence?.(event.text);
+    else if (event.type === "done") done = event;
+  };
+  for (;;) {
+    const { value, done: finished } = await reader.read();
+    if (value) buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split("\n");
+    buffer = lines.pop() ?? "";
+    lines.forEach(handle);
+    if (finished) break;
+  }
+  handle(buffer);
+  if (!done) throw new Error("La respuesta se cortó");
+  return done;
+}
 
 /* ---------- conversations: Osky asks the name first and every chat is logged ---------- */
 
 export const startConversation = (channel: "chat" | "persona") =>
-  post<{ id: string; greeting: string }>("/api/conversations", { channel });
+  post<{ id: string; greeting: string; privacy_url: string }>("/api/conversations", { channel });
 
 export const sendName = (conversationId: string, text: string, attempt: number) =>
   post<NameResult>(`/api/conversations/${conversationId}/name`, { text, attempt });
@@ -83,19 +152,23 @@ export type ConversationSummary = {
   last_activity_at: string;
   questions: number;
   last_question: string | null;
+  ended_reason?: string | null;
 };
 export type Transcript = {
   id: string;
   name: string;
   channel: string;
   started_at: string;
+  consent_at?: string | null;
+  policy_version?: string | null;
+  ended_reason?: string | null;
   messages: { at: string; role: "visitante" | "osky"; text: string; intent: string | null; source: string | null }[];
 };
 
 export class AdminAuthError extends Error {}
 
-async function adminFetch(path: string, token: string): Promise<Response> {
-  const response = await fetch(apiUrl(path), { headers: token ? { "X-Admin-Token": token } : {} });
+async function adminFetch(path: string, token: string, method = "GET"): Promise<Response> {
+  const response = await fetch(apiUrl(path), { method, headers: token ? { "X-Admin-Token": token } : {} });
   if (response.status === 401 || response.status === 403) throw new AdminAuthError(await response.text());
   if (!response.ok) throw new Error(`Error ${response.status}`);
   return response;
@@ -109,6 +182,11 @@ export const adminConversations = async (token: string, offset = 0, q = "") =>
 
 export const adminTranscript = async (token: string, id: string) =>
   (await adminFetch(`/api/admin/conversations/${id}`, token)).json() as Promise<Transcript>;
+
+/** Right to deletion: removes the conversation and all its messages. */
+export const adminDelete = async (token: string, id: string) => {
+  await adminFetch(`/api/admin/conversations/${id}`, token, "DELETE");
+};
 
 export const adminExportCsv = async (token: string) => (await adminFetch("/api/admin/export.csv", token)).blob();
 

@@ -95,7 +95,7 @@ def _transcribe_local(audio: bytes) -> tuple[str, float]:
 # ---------- Groq cloud ----------
 
 def _transcribe_groq(audio: bytes, content_type: str) -> tuple[str, float]:
-    extension = "ogg" if "ogg" in content_type else "mp4" if "mp4" in content_type else "webm"
+    extension = "ogg" if "ogg" in content_type else "mp4" if "mp4" in content_type else "wav" if "wav" in content_type else "webm"
     response = httpx.post(
         GROQ_STT_URL,
         headers={"Authorization": f"Bearer {settings.groq_api_key}"},

@@ -13,6 +13,9 @@ function audioContext(): AudioContext {
   return ctx;
 }
 
+/** The page's AudioContext (unlocked by unlockAudio), shared with the voice activity detector. */
+export const sharedAudioContext = () => audioContext();
+
 /** Call inside a click handler: browsers only allow audio after a user action. */
 export function unlockAudio() {
   unlockMediaElement(); // iPhone: speaker + silent switch, and the fallback player
