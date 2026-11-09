@@ -24,11 +24,21 @@ def test_forged_forwarded_for_does_not_skip_the_limit(monkeypatch):
     monkeypatch.setattr(settings, "rate_limit_per_minute", 3)
     monkeypatch.setattr(settings, "global_rate_limit_per_minute", 0)
     security._hits.clear()
-    # The proxy appends the real address at the END; the forged start changes on every call.
+    # Render's chain: visitor, then 2 proxies (TRUSTED_PROXY_HOPS=3). The forged start changes on
+    # every call, the real visitor (5.5.5.5) does not.
+    monkeypatch.setattr(settings, "trusted_proxy_hops", 3)
     with pytest.raises(HTTPException) as err:
         for i in range(10):
-            security.rate_limit(make_request("1.1.1.1", f"10.0.0.{i}, 5.5.5.5"))
+            security.rate_limit(make_request("1.1.1.1", f"10.0.0.{i}, 5.5.5.5, 172.16.0.1, 172.16.0.2"))
     assert err.value.status_code == 429
+
+def test_visitors_behind_the_same_proxies_are_told_apart(monkeypatch):
+    monkeypatch.setattr(settings, "rate_limit_per_minute", 3)
+    monkeypatch.setattr(settings, "global_rate_limit_per_minute", 0)
+    monkeypatch.setattr(settings, "trusted_proxy_hops", 3)
+    security._hits.clear()
+    for i in range(10):  # 10 different visitors through Render's 2 proxies: nobody is blocked
+        security.rate_limit(make_request("1.1.1.1", f"8.8.8.{i}, 172.16.0.1, 172.16.0.2"))
 
 def test_global_cap_applies_across_ips(monkeypatch):
     monkeypatch.setattr(settings, "global_rate_limit_per_minute", 4)
