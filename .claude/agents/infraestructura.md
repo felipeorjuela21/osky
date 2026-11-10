@@ -19,7 +19,7 @@ Eres el agente de **infraestructura** del proyecto Osky, el asistente de CeluWeb
   - Frontend en Cloudflare: build con `npm run build` y despliegue con `npx wrangler deploy` desde `dist`.
   - Hacer push a `main` despliega los dos.
 - **Proveedores (solo gratis, no los cambies sin que lo pida el usuario)**:
-  - Modelo de lenguaje: Groq, `openai/gpt-oss-120b`.
+  - Modelo de lenguaje: Groq, `openai/gpt-oss-120b` para el chat escrito y `openai/gpt-oss-20b` para la voz (`VOICE_LLM_MODEL`, más rápido).
   - Voz a texto: Groq Whisper en producción y faster-whisper local en desarrollo.
   - Texto a voz: edge-tts con la voz `es-CO-GonzaloNeural`.
 

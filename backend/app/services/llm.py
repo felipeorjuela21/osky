@@ -35,8 +35,8 @@ NOT_CHAT = re.compile(r"whisper|tts|guard|playai|orpheus|distil|compound", re.I)
 # One connection pool for every call: no new TLS handshake with Groq on each question.
 _client = httpx.Client(timeout=10, limits=httpx.Limits(max_keepalive_connections=5, keepalive_expiry=60))
 
-# What /health shows: the model in use and the last error (never the key).
-status: dict = {"model": None, "ok": None, "error": None}
+# What /health shows: the models in use and the last error (never the key).
+status: dict = {"model": None, "voice_model": None, "ok": None, "error": None}
 
 def _headers() -> dict:
     return {"Authorization": f"Bearer {settings.groq_api_key}"}
@@ -65,8 +65,16 @@ def _payload(model: str, messages: list[dict]) -> dict:
 def _chat(model: str, messages: list[dict]) -> httpx.Response:
     return _client.post(GROQ_CHAT_URL, headers=_headers(), json=_payload(model, messages), timeout=10)
 
-def _complete(messages: list[dict]) -> str:
-    model = status["model"] or settings.llm_model
+def _model_key(style: str) -> str:
+    """Which status entry holds the model for this style: voice may use a faster one."""
+    return "voice_model" if style == "voice" and settings.voice_llm_model else "model"
+
+def _model_for(style: str) -> str:
+    key = _model_key(style)
+    return status[key] or (settings.voice_llm_model if key == "voice_model" else settings.llm_model)
+
+def _complete(messages: list[dict], style: str = "chat") -> str:
+    model = _model_for(style)
     response = _chat(model, messages)
     if response.status_code in (400, 404) and "model" in response.text.lower():
         # Model retired or renamed: ask Groq which ones exist and retry once.
@@ -80,7 +88,7 @@ def _complete(messages: list[dict]) -> str:
     content = (choice["message"].get("content") or "").strip()
     if not content or choice.get("finish_reason") == "length":
         raise ValueError(f"respuesta vacía o cortada (finish_reason={choice.get('finish_reason')})")
-    status.update(model=model, ok=True, error=None)
+    status.update({_model_key(style): model, "ok": True, "error": None})
     return content
 
 def _error_text(exc: Exception) -> str:
@@ -152,7 +160,7 @@ def natural_answer(question: str, context: list[dict], style: str = "chat",
         return None
     messages, sources = _prompt(question, context, style, history)
     try:
-        answer = _complete(messages)
+        answer = _complete(messages, style)
     except Exception as exc:  # network, quota (429), timeouts, invalid key...
         status.update(ok=False, error=_error_text(exc))
         logger.warning("LLM unavailable, using extract: %s", status["error"])
@@ -214,7 +222,7 @@ def stream_natural_answer(question: str, context: list[dict], style: str = "voic
         return
     messages, sources = _prompt(question, context, style, history)
     allowed = _numbers(sources)
-    model = status["model"] or settings.llm_model
+    model = _model_for(style)
     buffer, thinking, finish, said = "", False, None, False
 
     def checked(sentence: str) -> str | None:
@@ -274,4 +282,4 @@ def stream_natural_answer(question: str, context: list[dict], style: str = "voic
         ok = checked(tail)
         if ok:
             yield ok
-    status.update(model=model, ok=True, error=None)
+    status.update({_model_key(style): model, "ok": True, "error": None})

@@ -57,7 +57,7 @@ def test_self_harm_gets_a_help_line():
 def groq(monkeypatch):
     monkeypatch.setattr(settings, "groq_api_key", "test-key")
     monkeypatch.setattr(settings, "llm_provider", "groq")
-    llm.status.update(model=None, ok=None, error=None)
+    llm.status.update(model=None, voice_model=None, ok=None, error=None)
 
     def use(deltas):
         def fake(model, messages):
@@ -65,7 +65,7 @@ def groq(monkeypatch):
                 yield d, "stop" if i == len(deltas) - 1 else None
         monkeypatch.setattr(llm, "_stream_lines", fake)
     yield use
-    llm.status.update(model=None, ok=None, error=None)
+    llm.status.update(model=None, voice_model=None, ok=None, error=None)
 
 CONTEXT = [{"title": "TMS", "content": "TMS optimiza la logística."}]
 

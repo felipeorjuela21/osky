@@ -24,7 +24,7 @@ def test_sentences_split_only_at_sentence_ends():
 def groq(monkeypatch):
     monkeypatch.setattr(settings, "groq_api_key", "test-key")
     monkeypatch.setattr(settings, "llm_provider", "groq")
-    llm.status.update(model=None, ok=None, error=None)
+    llm.status.update(model=None, voice_model=None, ok=None, error=None)
 
     def use(deltas, finish="stop"):
         def fake(model, messages):
@@ -32,7 +32,7 @@ def groq(monkeypatch):
                 yield d, finish if i == len(deltas) - 1 else None
         monkeypatch.setattr(llm, "_stream_lines", fake)
     yield use
-    llm.status.update(model=None, ok=None, error=None)
+    llm.status.update(model=None, voice_model=None, ok=None, error=None)
 
 def test_stream_yields_sentences_as_they_arrive(groq):
     groq(["<think>pienso", "</think>¡Claro! TMS opti", "miza la logística. ", "Tiene 3 módulos."])
@@ -88,3 +88,17 @@ def test_stream_endpoint_falls_back_to_the_extract(client, monkeypatch):
 def test_stream_endpoint_blocks_offensive_language(client):
     events = _events(client, question="eres un malparido")
     assert events[0]["intent"] == "blocked" and events[-1]["ended"] is True
+
+def test_voice_uses_the_faster_model_and_chat_keeps_its_own(groq, monkeypatch):
+    monkeypatch.setattr(settings, "llm_model", "openai/gpt-oss-120b")
+    monkeypatch.setattr(settings, "voice_llm_model", "openai/gpt-oss-20b")
+    used = []
+
+    def fake(model, messages):
+        used.append(model)
+        yield "TMS optimiza la logística de tu empresa.", "stop"
+    monkeypatch.setattr(llm, "_stream_lines", fake)
+    list(llm.stream_natural_answer("¿Qué es TMS?", CONTEXT, "voice"))
+    list(llm.stream_natural_answer("¿Qué es TMS?", CONTEXT, "chat"))
+    assert used == ["openai/gpt-oss-20b", "openai/gpt-oss-120b"]
+    assert llm.status["voice_model"] == "openai/gpt-oss-20b" and llm.status["model"] == "openai/gpt-oss-120b"

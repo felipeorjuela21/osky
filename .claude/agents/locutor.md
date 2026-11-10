@@ -13,7 +13,7 @@ Recorrido completo de una pregunta: micrófono → detección de voz → WAV de 
 
 **Escuchar** (`frontend/src/voiceInput.ts`, clase `VoiceInput`):
 - Usa Silero VAD v5 (`@ricky0123/vad-web`) con los modos `off`, `listening`, `thinking` y `speaking`.
-- `LISTEN`: umbrales 0.5 y 0.35, y `redemptionMs` 1200. Es decir, 1,2 s de silencio terminan el turno, porque las preguntas largas tienen pausas.
+- `LISTEN`: umbrales 0.5 y 0.35, y `redemptionMs` 1000. Es decir, 1,0 s de silencio terminan el turno (antes 1,2 s), porque las preguntas largas tienen pausas.
 - Abrir y cerrar el micrófono pasa por una cola (`run` y `enqueue`). Si silencias justo mientras se abre, igual termina cerrado.
 - **Interrupción por voz**: es opcional, con `localStorage oski.bargeIn = "1"`, y nunca se activa en iOS. Con el micrófono abierto mientras Osky habla, el sistema operativo **baja el volumen** de Osky (ducking). Por eso viene apagada.
 - Respaldo: `frontend/src/stt.ts` (`listenTurn`), que detecta por volumen, y el reconocimiento del navegador si el servidor no puede transcribir.
@@ -32,7 +32,7 @@ Recorrido completo de una pregunta: micrófono → detección de voz → WAV de 
 ## Tiempos de referencia en producción (nov 2026)
 | Paso | Tiempo |
 |---|---|
-| Silencio de fin de turno | 1,2 s |
+| Silencio de fin de turno | 1,0 s |
 | Voz a texto | 1,0 a 1,3 s |
 | Búsqueda y modelo hasta la primera frase | ~2 s |
 | Voz de la primera frase | 0,5 a 1,1 s |

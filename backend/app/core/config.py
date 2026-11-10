@@ -17,6 +17,9 @@ class Settings(BaseSettings):
     groq_api_key: str = ""
     groq_stt_model: str = "whisper-large-v3-turbo"
     llm_model: str = "openai/gpt-oss-120b"  # llama-3.3-70b-versatile was retired by Groq
+    # Spoken answers use a smaller, faster model (measured Nov 2026: first sentence ~0.45 s
+    # instead of ~0.6 s, with fewer slow spikes). Empty = same model as the chat.
+    voice_llm_model: str = "openai/gpt-oss-20b"
     # Natural answers: "groq" rewrites the retrieved company text conversationally
     # (never adding facts); "none" reads the extracts. "auto" = groq if a key exists.
     llm_provider: str = "auto"

@@ -129,7 +129,7 @@ export function listenTurn(opts: ListenOptions = {}): ListenHandle {
   }
 
   const maxWaitMs = opts.maxWaitMs ?? 9000;
-  const endSilenceMs = opts.endSilenceMs ?? 1200; // long questions have pauses
+  const endSilenceMs = opts.endSilenceMs ?? 1000; // long questions have pauses
   const maxTurnMs = opts.maxTurnMs ?? 45000;
   let aborted = false;
   let stopRequested = false;

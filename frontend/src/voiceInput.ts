@@ -42,9 +42,9 @@ export function setBargeIn(on: boolean) {
 
 const ASSETS = `${import.meta.env.BASE_URL}vad/`;
 
-// Your turn: normal sensitivity; the turn ends after 1.2 s of silence, so the
-// natural pauses of a long question don't cut it.
-const LISTEN = { positiveSpeechThreshold: 0.5, negativeSpeechThreshold: 0.35, redemptionMs: 1200 };
+// Your turn: normal sensitivity; the turn ends after 1.0 s of silence (was 1.2 s:
+// faster answers; 1.0 s still lets the pauses of a long question through).
+const LISTEN = { positiveSpeechThreshold: 0.5, negativeSpeechThreshold: 0.35, redemptionMs: 1000 };
 // While Osky talks: only clear, sustained speech counts, so his own voice
 // (if the echo canceller lets some through) or a cough don't interrupt him.
 const OVER_OSKY = { positiveSpeechThreshold: 0.8, negativeSpeechThreshold: 0.6, redemptionMs: 1200 };
